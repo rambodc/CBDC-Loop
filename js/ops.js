@@ -8,6 +8,7 @@ Ops.Gl=Ops.Gl || {};
 Ops.Ui=Ops.Ui || {};
 Ops.Anim=Ops.Anim || {};
 Ops.Html=Ops.Html || {};
+Ops.Json=Ops.Json || {};
 Ops.Math=Ops.Math || {};
 Ops.Vars=Ops.Vars || {};
 Ops.Array=Ops.Array || {};
@@ -13676,6 +13677,458 @@ CABLES.OPS["5c6d375a-82db-4366-8013-93f56b4061a9"]={f:Ops.String.NumberToString_
 
 // **************************************************************
 // 
+// Ops.Gl.RandomCluster
+// 
+// **************************************************************
+
+Ops.Gl.RandomCluster = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={};
+const
+    exe = op.inTrigger("exe"),
+    num = op.inValueInt("num"),
+    seed = op.inValueFloat("random seed", 1.5),
+    round = op.inValueBool("round", false),
+    size = op.inValueFloat("size", 10),
+    scaleX = op.inValueFloat("scaleX", 1),
+    scaleY = op.inValueFloat("scaleY", 1),
+    scaleZ = op.inValueFloat("scaleZ", 1),
+    trigger = op.outTrigger("trigger"),
+    idx = op.outValue("index"),
+    rnd = op.outValue("rnd"),
+    rotX = op.inValueSlider("Rotate X", 1),
+    rotY = op.inValueSlider("Rotate Y", 1),
+    rotZ = op.inValueSlider("Rotate Z", 1),
+    scrollX = op.inValue("Scroll X", 0);
+
+op.setPortGroup("Area", [size, scaleX, scaleY, scaleZ]);
+op.setPortGroup("Rotation", [rotX, rotY, rotZ]);
+op.setPortGroup("Parameters", [num, round, seed]);
+op.toWorkPortsNeedToBeLinked(exe, trigger);
+
+const cgl = op.patch.cgl;
+const randoms = [];
+const origRandoms = [];
+const randomsRot = [];
+const randomsFloats = [];
+
+const transVec = vec3.create();
+const mat = mat4.create();
+
+function doRender()
+{
+    if (cgl.shouldDrawHelpers(op))
+    {
+        CABLES.GL_MARKER.drawCube(op,
+            size.get() / 2 * scaleX.get(),
+            size.get() / 2 * scaleY.get(),
+            size.get() / 2 * scaleZ.get());
+    }
+
+    if (scrollX.get() != 0)
+    {
+        for (let i = 0; i < origRandoms.length; i++)
+        {
+            randoms[i][0] = origRandoms[i][0] + scrollX.get();
+            randoms[i][0] = (randoms[i][0] % size.get()) - (size.get() / 2);
+        }
+    }
+
+    for (let i = 0; i < randoms.length; i++)
+    {
+        cgl.pushModelMatrix();
+
+        mat4.translate(cgl.mMatrix, cgl.mMatrix, randoms[i]);
+
+        if (randomsRot[i][0]) mat4.rotateX(cgl.mMatrix, cgl.mMatrix, randomsRot[i][0]);
+        if (randomsRot[i][1]) mat4.rotateY(cgl.mMatrix, cgl.mMatrix, randomsRot[i][1]);
+        if (randomsRot[i][2]) mat4.rotateZ(cgl.mMatrix, cgl.mMatrix, randomsRot[i][2]);
+
+        idx.set(i);
+        rnd.set(randomsFloats[i]);
+
+        trigger.trigger();
+        // op.patch.instancing.increment();
+
+        cgl.popModelMatrix();
+    }
+    // op.patch.instancing.popLoop();
+}
+
+exe.onTriggered = doRender;
+
+function getRandomPos()
+{
+    return vec3.fromValues(
+        scaleX.get() * (Math.seededRandom() - 0.5) * size.get(),
+        scaleY.get() * (Math.seededRandom() - 0.5) * size.get(),
+        scaleZ.get() * (Math.seededRandom() - 0.5) * size.get()
+    );
+}
+
+function reset()
+{
+    randoms.length = 0;
+    randomsRot.length = 0;
+    randomsFloats.length = 0;
+    origRandoms.length = 0;
+
+    Math.randomSeed = seed.get();
+
+    const makeRound = round.get();
+
+    for (let i = 0; i < num.get(); i++)
+    {
+        randomsFloats.push(Math.seededRandom());
+
+        let v = getRandomPos();
+
+        if (makeRound && size.get() > 0)
+            while (vec3.len(v) > size.get() / 2)
+                v = getRandomPos();
+
+        origRandoms.push([v[0], v[1], v[2]]);
+        randoms.push(v);
+
+        randomsRot.push(vec3.fromValues(
+            Math.seededRandom() * 360 * CGL.DEG2RAD * rotX.get(),
+            Math.seededRandom() * 360 * CGL.DEG2RAD * rotY.get(),
+            Math.seededRandom() * 360 * CGL.DEG2RAD * rotZ.get()
+        ));
+    }
+}
+
+seed.onChange = reset;
+num.onChange = reset;
+size.onChange = reset;
+scaleX.onChange = reset;
+scaleZ.onChange = reset;
+scaleY.onChange = reset;
+round.onChange = reset;
+rotX.onChange = reset;
+rotY.onChange = reset;
+rotZ.onChange = reset;
+
+num.set(100);
+
+
+};
+
+Ops.Gl.RandomCluster.prototype = new CABLES.Op();
+CABLES.OPS["ca3bc984-e596-48fb-b53d-502eb13979b0"]={f:Ops.Gl.RandomCluster,objName:"Ops.Gl.RandomCluster"};
+
+
+
+
+// **************************************************************
+// 
+// Ops.Gl.Render2Texture
+// 
+// **************************************************************
+
+Ops.Gl.Render2Texture = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={};
+const cgl = op.patch.cgl;
+
+const
+    render = op.inTrigger("render"),
+    useVPSize = op.inValueBool("use viewport size", true),
+    width = op.inValueInt("texture width", 512),
+    height = op.inValueInt("texture height", 512),
+    aspect = op.inBool("Auto Aspect", false),
+    tfilter = op.inSwitch("filter", ["nearest", "linear", "mipmap"], "linear"),
+    twrap = op.inSwitch("Wrap", ["Clamp", "Repeat", "Mirror"], "Repeat"),
+    msaa = op.inSwitch("MSAA", ["none", "2x", "4x", "8x"], "none"),
+    trigger = op.outTrigger("trigger"),
+    tex = op.outTexture("texture"),
+    texDepth = op.outTexture("textureDepth"),
+    fpTexture = op.inValueBool("HDR"),
+    depth = op.inValueBool("Depth", true),
+    clear = op.inValueBool("Clear", true);
+
+let fb = null;
+let reInitFb = true;
+tex.set(CGL.Texture.getEmptyTexture(cgl));
+
+op.setPortGroup("Size", [useVPSize, width, height, aspect]);
+
+const prevViewPort = [0, 0, 0, 0];
+
+fpTexture.setUiAttribs({ "title": "Pixelformat Float 32bit" });
+
+fpTexture.onChange =
+    depth.onChange =
+    clear.onChange =
+    tfilter.onChange =
+    twrap.onChange =
+    msaa.onChange = initFbLater;
+
+useVPSize.onChange = updateVpSize;
+
+render.onTriggered =
+    op.preRender = doRender;
+
+updateVpSize();
+
+function updateVpSize()
+{
+    width.setUiAttribs({ "greyout": useVPSize.get() });
+    height.setUiAttribs({ "greyout": useVPSize.get() });
+    aspect.setUiAttribs({ "greyout": useVPSize.get() });
+}
+
+function initFbLater()
+{
+    reInitFb = true;
+}
+
+function doRender()
+{
+    const vp = cgl.getViewPort();
+    prevViewPort[0] = vp[0];
+    prevViewPort[1] = vp[1];
+    prevViewPort[2] = vp[2];
+    prevViewPort[3] = vp[3];
+
+    if (!fb || reInitFb)
+    {
+        if (fb) fb.delete();
+
+        let selectedWrap = CGL.Texture.WRAP_REPEAT;
+        if (twrap.get() == "Clamp") selectedWrap = CGL.Texture.WRAP_CLAMP_TO_EDGE;
+        else if (twrap.get() == "Mirror") selectedWrap = CGL.Texture.WRAP_MIRRORED_REPEAT;
+
+        let selectFilter = CGL.Texture.FILTER_NEAREST;
+        if (tfilter.get() == "nearest") selectFilter = CGL.Texture.FILTER_NEAREST;
+        else if (tfilter.get() == "linear") selectFilter = CGL.Texture.FILTER_LINEAR;
+        else if (tfilter.get() == "mipmap") selectFilter = CGL.Texture.FILTER_MIPMAP;
+
+        if (fpTexture.get() && tfilter.get() == "mipmap") op.setUiError("fpmipmap", "Don't use mipmap and HDR at the same time, many systems do not support this.");
+        else op.setUiError("fpmipmap", null);
+
+        if (cgl.glVersion >= 2)
+        {
+            let ms = true;
+            let msSamples = 4;
+
+            if (msaa.get() == "none")
+            {
+                msSamples = 0;
+                ms = false;
+            }
+            if (msaa.get() == "2x") msSamples = 2;
+            if (msaa.get() == "4x") msSamples = 4;
+            if (msaa.get() == "8x") msSamples = 8;
+
+            fb = new CGL.Framebuffer2(cgl, 8, 8,
+                {
+                    "name": "render2texture " + op.id,
+                    "isFloatingPointTexture": fpTexture.get(),
+                    "multisampling": ms,
+                    "wrap": selectedWrap,
+                    "filter": selectFilter,
+                    "depth": depth.get(),
+                    "multisamplingSamples": msSamples,
+                    "clear": clear.get()
+                });
+        }
+        else
+        {
+            fb = new CGL.Framebuffer(cgl, 8, 8, { "isFloatingPointTexture": fpTexture.get(), "clear": clear.get() });
+        }
+
+        texDepth.set(fb.getTextureDepth());
+        reInitFb = false;
+    }
+
+    if (useVPSize.get())
+    {
+        width.set(cgl.getViewPort()[2]);
+        height.set(cgl.getViewPort()[3]);
+    }
+
+    if (fb.getWidth() != Math.ceil(width.get()) || fb.getHeight() != Math.ceil(height.get()))
+    {
+        fb.setSize(
+            Math.max(1, Math.ceil(width.get())),
+            Math.max(1, Math.ceil(height.get())));
+    }
+
+    fb.renderStart(cgl);
+
+    if (aspect.get()) mat4.perspective(cgl.pMatrix, 45, width.get() / height.get(), 0.1, 1000.0);
+
+    trigger.trigger();
+    fb.renderEnd(cgl);
+
+    // cgl.resetViewPort();
+    cgl.setViewPort(prevViewPort[0], prevViewPort[1], prevViewPort[2], prevViewPort[3]);
+
+    tex.set(CGL.Texture.getEmptyTexture(op.patch.cgl));
+    tex.set(fb.getTextureColor());
+}
+
+
+};
+
+Ops.Gl.Render2Texture.prototype = new CABLES.Op();
+CABLES.OPS["d01fa820-396c-4cb5-9d78-6b14762852af"]={f:Ops.Gl.Render2Texture,objName:"Ops.Gl.Render2Texture"};
+
+
+
+
+// **************************************************************
+// 
+// Ops.Html.YoutubePlayer
+// 
+// **************************************************************
+
+Ops.Html.YoutubePlayer = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={};
+const
+    src = op.inString("Video Id", "dQw4w9WgXcQ"),
+    active = op.inBool("Active", true),
+    inStyle = op.inStringEditor("Style"),
+    elId = op.inString("ElementID"),
+    paramAutoplay = op.inBool("Autoplay", false),
+    paramCC = op.inBool("Display Captions", false),
+    paramLoop = op.inBool("Loop", false),
+    paramFs = op.inBool("Allow Fullscreen", true),
+    paramControls = op.inBool("Hide Controls", false),
+    paramStart = op.inInt("Start at Second", 0),
+
+    outEle = op.outObject("Element"),
+    outDirectLink = op.outString("Direct Link");
+    // outImageMax=op.outString("Thumbnail Max");
+
+const defaultStyle = "position:absolute;\n\
+z-index:9;\n\
+border:0;\n";
+
+op.setPortGroup("Youtube Options", [paramAutoplay, paramCC, paramLoop, paramFs, paramControls, paramStart]);
+
+// https://developers.google.com/youtube/player_parameters
+
+let element = null;
+let initialized = false;
+
+paramStart.onChange =
+    paramAutoplay.onChange =
+    paramCC.onChange =
+    paramLoop.onChange =
+    paramFs.onChange =
+    paramControls.onChange =
+    src.onChange = updateURL;
+
+elId.onChange = updateID;
+inStyle.onChange = updateStyle;
+op.onDelete = removeEle;
+
+active.onChange = update;
+
+op.init = function ()
+{
+    initialized = true;
+    setTimeout(() => { update(); }, 100);
+};
+
+inStyle.set(defaultStyle);
+
+function update()
+{
+    if (!active.get())
+    {
+        removeEle();
+        return;
+    }
+
+    addElement();
+}
+
+function addElement()
+{
+    if (!initialized) return;
+    if (element) removeEle();
+
+    const parent = op.patch.cgl.canvas.parentElement;
+    element = document.createElement("iframe");
+    element.dataset.op = op.id;
+    element.style.position = "absolute";
+    element.allowfullscreen = true;
+    element.frameborder = 0;
+    element.allow = "accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture";
+
+    parent.appendChild(element);
+
+    updateURL();
+    updateID();
+    updateStyle();
+
+    outEle.set(null);
+    outEle.set(element);
+}
+
+function removeEle()
+{
+    if (element && element.parentNode) element.parentNode.removeChild(element);
+    element = null;
+    outEle.set(null);
+}
+
+function updateURL()
+{
+    if (src.get()) outDirectLink.set("https://www.youtube.com/watch?v=" + src.get());
+
+    if (!initialized) return;
+    if (!active.get()) return;
+    const urlParams = [];
+
+    if (paramAutoplay.get()) urlParams.push("autoplay=1");
+    if (paramCC.get()) urlParams.push("cc_load_policy=1");
+    if (paramLoop.get()) urlParams.push("loop=1");
+    if (paramFs.get()) urlParams.push("fs=1");
+    if (paramControls.get()) urlParams.push("controls=0");
+    if (paramStart.get() > 0) urlParams.push("start=" + paramStart.get());
+
+    let urlParamsStr = "";
+    if (urlParams.length > 0) urlParamsStr = "?" + urlParams.join("&") + "&rel=0";
+
+    const urlStr = "https://www.youtube.com/embed/" + src.get() + urlParamsStr;
+    if (element)
+        element.setAttribute("src", urlStr);
+}
+
+function updateID()
+{
+    if (!active.get()) return;
+    if (element) element.setAttribute("id", elId.get());
+}
+
+function updateStyle()
+{
+    if (!active.get()) return;
+    if (element) element.style = inStyle.get();
+}
+
+
+};
+
+Ops.Html.YoutubePlayer.prototype = new CABLES.Op();
+CABLES.OPS["b60ad395-d6ad-4309-86c5-c6bbffaf176c"]={f:Ops.Html.YoutubePlayer,objName:"Ops.Html.YoutubePlayer"};
+
+
+
+
+// **************************************************************
+// 
 // Ops.Gl.Meshes.TextMesh_v2
 // 
 // **************************************************************
@@ -15189,452 +15642,1793 @@ CABLES.OPS["0d83ed06-cdbe-4fe0-87bb-0ccece7fb6e1"]={f:Ops.Gl.Phong.PhongMaterial
 
 // **************************************************************
 // 
-// Ops.Gl.RandomCluster
+// Ops.Gl.InteractiveRectangle_v2
 // 
 // **************************************************************
 
-Ops.Gl.RandomCluster = function()
+Ops.Gl.InteractiveRectangle_v2 = function()
 {
 CABLES.Op.apply(this,arguments);
 const op=this;
 const attachments={};
 const
-    exe = op.inTrigger("exe"),
-    num = op.inValueInt("num"),
-    seed = op.inValueFloat("random seed", 1.5),
-    round = op.inValueBool("round", false),
-    size = op.inValueFloat("size", 10),
-    scaleX = op.inValueFloat("scaleX", 1),
-    scaleY = op.inValueFloat("scaleY", 1),
-    scaleZ = op.inValueFloat("scaleZ", 1),
-    trigger = op.outTrigger("trigger"),
-    idx = op.outValue("index"),
-    rnd = op.outValue("rnd"),
-    rotX = op.inValueSlider("Rotate X", 1),
-    rotY = op.inValueSlider("Rotate Y", 1),
-    rotZ = op.inValueSlider("Rotate Z", 1),
-    scrollX = op.inValue("Scroll X", 0);
+    render = op.inTrigger("Trigger in"),
+    trigger = op.outTrigger("Trigger out"),
+    width = op.inValue("Width", 1),
+    height = op.inValue("Height", 1),
+    inId = op.inString("ID"),
+    classPort = op.inString("Class"),
+    pivotX = op.inValueSelect("Pivot x", ["center", "left", "right"]),
+    pivotY = op.inValueSelect("Pivot y", ["center", "top", "bottom"]),
+    axis = op.inValueSelect("Axis", ["xy", "xz"]),
+    isInteractive = op.inValueBool("Is Interactive", true),
+    renderRect = op.inValueBool("Render Rectangle", true),
+    divVisible = op.inValueBool("Show Boundings", true),
+    cursorPort = op.inValueSelect("Cursor", ["auto", "crosshair", "pointer", "Hand", "move", "n-resize", "ne-resize", "e-resize", "se-resize", "s-resize", "sw-resize", "w-resize", "nw-resize", "text", "wait", "help", "none"], "pointer"),
+    active = op.inValueBool("Render", true);
 
-op.setPortGroup("Area", [size, scaleX, scaleY, scaleZ]);
-op.setPortGroup("Rotation", [rotX, rotY, rotZ]);
-op.setPortGroup("Parameters", [num, round, seed]);
-op.toWorkPortsNeedToBeLinked(exe, trigger);
-
-const cgl = op.patch.cgl;
-const randoms = [];
-const origRandoms = [];
-const randomsRot = [];
-const randomsFloats = [];
-
-const transVec = vec3.create();
-const mat = mat4.create();
-
-function doRender()
-{
-    if (cgl.shouldDrawHelpers(op))
-    {
-        CABLES.GL_MARKER.drawCube(op,
-            size.get() / 2 * scaleX.get(),
-            size.get() / 2 * scaleY.get(),
-            size.get() / 2 * scaleZ.get());
-    }
-
-    if (scrollX.get() != 0)
-    {
-        for (let i = 0; i < origRandoms.length; i++)
-        {
-            randoms[i][0] = origRandoms[i][0] + scrollX.get();
-            randoms[i][0] = (randoms[i][0] % size.get()) - (size.get() / 2);
-        }
-    }
-
-    for (let i = 0; i < randoms.length; i++)
-    {
-        cgl.pushModelMatrix();
-
-        mat4.translate(cgl.mMatrix, cgl.mMatrix, randoms[i]);
-
-        if (randomsRot[i][0]) mat4.rotateX(cgl.mMatrix, cgl.mMatrix, randomsRot[i][0]);
-        if (randomsRot[i][1]) mat4.rotateY(cgl.mMatrix, cgl.mMatrix, randomsRot[i][1]);
-        if (randomsRot[i][2]) mat4.rotateZ(cgl.mMatrix, cgl.mMatrix, randomsRot[i][2]);
-
-        idx.set(i);
-        rnd.set(randomsFloats[i]);
-
-        trigger.trigger();
-        // op.patch.instancing.increment();
-
-        cgl.popModelMatrix();
-    }
-    // op.patch.instancing.popLoop();
-}
-
-exe.onTriggered = doRender;
-
-function getRandomPos()
-{
-    return vec3.fromValues(
-        scaleX.get() * (Math.seededRandom() - 0.5) * size.get(),
-        scaleY.get() * (Math.seededRandom() - 0.5) * size.get(),
-        scaleZ.get() * (Math.seededRandom() - 0.5) * size.get()
-    );
-}
-
-function reset()
-{
-    randoms.length = 0;
-    randomsRot.length = 0;
-    randomsFloats.length = 0;
-    origRandoms.length = 0;
-
-    Math.randomSeed = seed.get();
-
-    const makeRound = round.get();
-
-    for (let i = 0; i < num.get(); i++)
-    {
-        randomsFloats.push(Math.seededRandom());
-
-        let v = getRandomPos();
-
-        if (makeRound && size.get() > 0)
-            while (vec3.len(v) > size.get() / 2)
-                v = getRandomPos();
-
-        origRandoms.push([v[0], v[1], v[2]]);
-        randoms.push(v);
-
-        randomsRot.push(vec3.fromValues(
-            Math.seededRandom() * 360 * CGL.DEG2RAD * rotX.get(),
-            Math.seededRandom() * 360 * CGL.DEG2RAD * rotY.get(),
-            Math.seededRandom() * 360 * CGL.DEG2RAD * rotZ.get()
-        ));
-    }
-}
-
-seed.onChange = reset;
-num.onChange = reset;
-size.onChange = reset;
-scaleX.onChange = reset;
-scaleZ.onChange = reset;
-scaleY.onChange = reset;
-round.onChange = reset;
-rotX.onChange = reset;
-rotY.onChange = reset;
-rotZ.onChange = reset;
-
-num.set(100);
-
-
-};
-
-Ops.Gl.RandomCluster.prototype = new CABLES.Op();
-CABLES.OPS["ca3bc984-e596-48fb-b53d-502eb13979b0"]={f:Ops.Gl.RandomCluster,objName:"Ops.Gl.RandomCluster"};
-
-
-
-
-// **************************************************************
-// 
-// Ops.Gl.Render2Texture
-// 
-// **************************************************************
-
-Ops.Gl.Render2Texture = function()
-{
-CABLES.Op.apply(this,arguments);
-const op=this;
-const attachments={};
-const cgl = op.patch.cgl;
+const geomOut = op.outObject("geometry");
+geomOut.ignoreValueSerialize = true;
 
 const
-    render = op.inTrigger("render"),
-    useVPSize = op.inValueBool("use viewport size", true),
-    width = op.inValueInt("texture width", 512),
-    height = op.inValueInt("texture height", 512),
-    aspect = op.inBool("Auto Aspect", false),
-    tfilter = op.inSwitch("filter", ["nearest", "linear", "mipmap"], "linear"),
-    twrap = op.inSwitch("Wrap", ["Clamp", "Repeat", "Mirror"], "Repeat"),
-    msaa = op.inSwitch("MSAA", ["none", "2x", "4x", "8x"], "none"),
-    trigger = op.outTrigger("trigger"),
-    tex = op.outTexture("texture"),
-    texDepth = op.outTexture("textureDepth"),
-    fpTexture = op.inValueBool("HDR"),
-    depth = op.inValueBool("Depth", true),
-    clear = op.inValueBool("Clear", true);
+    mouseOver = op.outValue("Pointer Hover", false),
+    mouseDown = op.outValue("Pointer Down", false),
+    outX = op.outValue("Pointer X"),
+    outY = op.outValue("Pointer Y"),
+    outTop = op.outValue("Top"),
+    outLeft = op.outValue("Left"),
+    outRight = op.outValue("Right"),
+    outBottom = op.outValue("Bottom"),
+    mouseClick = op.outTrigger("Left Click");
 
-let fb = null;
-let reInitFb = true;
-tex.set(CGL.Texture.getEmptyTexture(cgl));
+const elementPort = op.outObject("Dom Element");
 
-op.setPortGroup("Size", [useVPSize, width, height, aspect]);
+active.setUiAttribs({ "title": "Active" });
 
-const prevViewPort = [0, 0, 0, 0];
+const cgl = op.patch.cgl;
+axis.set("xy");
+pivotX.set("center");
+pivotY.set("center");
 
-fpTexture.setUiAttribs({ "title": "Pixelformat Float 32bit" });
+const geom = new CGL.Geometry(op.name);
+let mesh = null;
+let div = null;
+const m = mat4.create();
+const trans = mat4.create();
+const pos = vec3.create();
+const divAlign = vec3.create();
+const divAlignSize = vec3.create();
 
-fpTexture.onChange =
-    depth.onChange =
-    clear.onChange =
-    tfilter.onChange =
-    twrap.onChange =
-    msaa.onChange = initFbLater;
+axis.onChange = rebuild;
+pivotX.onChange = rebuild;
+pivotY.onChange = rebuild;
+width.onChange = rebuild;
+height.onChange = rebuild;
+cursorPort.onChange = updateCursor;
+rebuild();
 
-useVPSize.onChange = updateVpSize;
+const modelMatrix = mat4.create();
+const identViewMatrix = mat4.create();
+const zeroVec3 = vec3.create();
 
-render.onTriggered =
-    op.preRender = doRender;
-
-updateVpSize();
-
-function updateVpSize()
+render.onTriggered = function ()
 {
-    width.setUiAttribs({ "greyout": useVPSize.get() });
-    height.setUiAttribs({ "greyout": useVPSize.get() });
-    aspect.setUiAttribs({ "greyout": useVPSize.get() });
-}
-
-function initFbLater()
-{
-    reInitFb = true;
-}
-
-function doRender()
-{
-    const vp = cgl.getViewPort();
-    prevViewPort[0] = vp[0];
-    prevViewPort[1] = vp[1];
-    prevViewPort[2] = vp[2];
-    prevViewPort[3] = vp[3];
-
-    if (!fb || reInitFb)
+    if (!div)
     {
-        if (fb) fb.delete();
-
-        let selectedWrap = CGL.Texture.WRAP_REPEAT;
-        if (twrap.get() == "Clamp") selectedWrap = CGL.Texture.WRAP_CLAMP_TO_EDGE;
-        else if (twrap.get() == "Mirror") selectedWrap = CGL.Texture.WRAP_MIRRORED_REPEAT;
-
-        let selectFilter = CGL.Texture.FILTER_NEAREST;
-        if (tfilter.get() == "nearest") selectFilter = CGL.Texture.FILTER_NEAREST;
-        else if (tfilter.get() == "linear") selectFilter = CGL.Texture.FILTER_LINEAR;
-        else if (tfilter.get() == "mipmap") selectFilter = CGL.Texture.FILTER_MIPMAP;
-
-        if (fpTexture.get() && tfilter.get() == "mipmap") op.setUiError("fpmipmap", "Don't use mipmap and HDR at the same time, many systems do not support this.");
-        else op.setUiError("fpmipmap", null);
-
-        if (cgl.glVersion >= 2)
-        {
-            let ms = true;
-            let msSamples = 4;
-
-            if (msaa.get() == "none")
-            {
-                msSamples = 0;
-                ms = false;
-            }
-            if (msaa.get() == "2x") msSamples = 2;
-            if (msaa.get() == "4x") msSamples = 4;
-            if (msaa.get() == "8x") msSamples = 8;
-
-            fb = new CGL.Framebuffer2(cgl, 8, 8,
-                {
-                    "name": "render2texture " + op.id,
-                    "isFloatingPointTexture": fpTexture.get(),
-                    "multisampling": ms,
-                    "wrap": selectedWrap,
-                    "filter": selectFilter,
-                    "depth": depth.get(),
-                    "multisamplingSamples": msSamples,
-                    "clear": clear.get()
-                });
-        }
-        else
-        {
-            fb = new CGL.Framebuffer(cgl, 8, 8, { "isFloatingPointTexture": fpTexture.get(), "clear": clear.get() });
-        }
-
-        texDepth.set(fb.getTextureDepth());
-        reInitFb = false;
+        setUpDiv();
+        addListeners();
+        updateDivVisibility();
+        updateIsInteractive();
     }
+    updateDivSize();
 
-    if (useVPSize.get())
-    {
-        width.set(cgl.getViewPort()[2]);
-        height.set(cgl.getViewPort()[3]);
-    }
-
-    if (fb.getWidth() != Math.ceil(width.get()) || fb.getHeight() != Math.ceil(height.get()))
-    {
-        fb.setSize(
-            Math.max(1, Math.ceil(width.get())),
-            Math.max(1, Math.ceil(height.get())));
-    }
-
-    fb.renderStart(cgl);
-
-    if (aspect.get()) mat4.perspective(cgl.pMatrix, 45, width.get() / height.get(), 0.1, 1000.0);
+    if (active.get() && renderRect.get() && mesh) mesh.render(cgl.getShader());
 
     trigger.trigger();
-    fb.renderEnd(cgl);
+};
 
-    // cgl.resetViewPort();
-    cgl.setViewPort(prevViewPort[0], prevViewPort[1], prevViewPort[2], prevViewPort[3]);
+function rebuild()
+{
+    let w = width.get();
+    let h = height.get();
+    let x = 0;
+    let y = 0;
 
-    tex.set(CGL.Texture.getEmptyTexture(op.patch.cgl));
-    tex.set(fb.getTextureColor());
+    if (typeof w == "string")w = parseFloat(w);
+    if (typeof h == "string")h = parseFloat(h);
+
+    if (pivotX.get() == "center")
+    {
+        x = 0;
+        divAlign[0] = -w / 2;
+    }
+    if (pivotX.get() == "right")
+    {
+        x = -w / 2;
+    }
+    if (pivotX.get() == "left")
+    {
+        x = w / 2;
+    }
+
+    if (pivotY.get() == "center")
+    {
+        y = 0;
+        divAlign[1] = -h / 2;
+    }
+    if (pivotY.get() == "top") y = -h / 2;
+    if (pivotY.get() == "bottom") y = +h / 2;
+
+    const verts = [];
+    const tc = [];
+    const norms = [];
+    const indices = [];
+
+    const numRows = 1;
+    const numColumns = 1;
+
+    const stepColumn = w / numColumns;
+    const stepRow = h / numRows;
+
+    let c, r;
+
+    for (r = 0; r <= numRows; r++)
+    {
+        for (c = 0; c <= numColumns; c++)
+        {
+            verts.push(c * stepColumn - width.get() / 2 + x);
+            if (axis.get() == "xz") verts.push(0.0);
+            verts.push(r * stepRow - height.get() / 2 + y);
+            if (axis.get() == "xy") verts.push(0.0);
+
+            tc.push(c / numColumns);
+            tc.push(1.0 - r / numRows);
+
+            if (axis.get() == "xz")
+            {
+                norms.push(0);
+                norms.push(1);
+                norms.push(0);
+            }
+
+            if (axis.get() == "xy")
+            {
+                norms.push(0);
+                norms.push(0);
+                norms.push(-1);
+            }
+        }
+    }
+
+    for (c = 0; c < numColumns; c++)
+    {
+        for (r = 0; r < numRows; r++)
+        {
+            const ind = c + (numColumns + 1) * r;
+            const v1 = ind;
+            const v2 = ind + 1;
+            const v3 = ind + numColumns + 1;
+            const v4 = ind + 1 + numColumns + 1;
+
+            indices.push(v1);
+            indices.push(v3);
+            indices.push(v2);
+
+            indices.push(v2);
+            indices.push(v3);
+            indices.push(v4);
+        }
+    }
+
+    geom.clear();
+    geom.vertices = verts;
+    geom.texCoords = tc;
+    geom.verticesIndices = indices;
+    geom.vertexNormals = norms;
+
+    if (!mesh) mesh = new CGL.Mesh(cgl, geom);
+    else mesh.setGeom(geom);
+
+    geomOut.set(null);
+    geomOut.set(geom);
+}
+
+let divX = 0;
+let divY = 0;
+let divWidth = 0;
+let divHeight = 0;
+
+const mMatrix = mat4.create();
+divVisible.onChange = updateDivVisibility;
+inId.onChange = updateId;
+classPort.onChange = updateClassNames;
+
+function updateDivVisibility()
+{
+    if (div)
+    {
+        if (divVisible.get()) div.style.border = "1px solid red";
+        else div.style.border = "none";
+    }
+}
+
+function updateCursor()
+{
+    if (div)
+    {
+        div.style.cursor = cursorPort.get();
+    }
+}
+
+function updateId()
+{
+    if (div)
+    {
+        div.setAttribute("id", inId.get());
+    }
+}
+
+function updateDivSize()
+{
+    // var vp=cgl.getViewPort();
+
+    mat4.multiply(mMatrix, cgl.vMatrix, cgl.mMatrix);
+    vec3.transformMat4(pos, divAlign, mMatrix);
+    vec3.transformMat4(trans, pos, cgl.pMatrix);
+
+    const x1 = (trans[0] * cgl.canvasWidth / 2) + cgl.canvasWidth / 2;
+    const y1 = (trans[1] * cgl.canvasHeight / 2) + cgl.canvasHeight / 2;
+
+    divAlignSize[0] = divAlign[0] + width.get();
+    divAlignSize[1] = divAlign[1];
+
+    vec3.transformMat4(pos, divAlignSize, mMatrix);
+    vec3.transformMat4(trans, pos, cgl.pMatrix);
+
+    const x2 = ((trans[0] * cgl.canvasWidth / 2) + cgl.canvasWidth / 2);
+    const y2 = ((trans[1] * cgl.canvasHeight / 2) + cgl.canvasHeight / 2);
+
+    divAlignSize[0] = divAlign[0];
+    divAlignSize[1] = divAlign[1] + height.get();
+
+    vec3.transformMat4(pos, divAlignSize, mMatrix);
+    vec3.transformMat4(trans, pos, cgl.pMatrix);
+
+    const x3 = ((trans[0] * cgl.canvasWidth / 2) + cgl.canvasWidth / 2);
+    const y3 = ((trans[1] * cgl.canvasHeight / 2) + cgl.canvasHeight / 2);
+
+    divAlignSize[0] = divAlign[0] + width.get();
+    divAlignSize[1] = divAlign[1] + height.get();
+
+    vec3.transformMat4(pos, divAlignSize, mMatrix);
+    vec3.transformMat4(trans, pos, cgl.pMatrix);
+
+    const x4 = ((trans[0] * cgl.canvasWidth / 2) + cgl.canvasWidth / 2);
+    const y4 = ((trans[1] * cgl.canvasHeight / 2) + cgl.canvasHeight / 2);
+
+    divX = Math.min(x1, x2, x3, x4);
+    divY = Math.min(cgl.canvasHeight - y1, cgl.canvasHeight - y2, cgl.canvasHeight - y3, cgl.canvasHeight - y4);
+
+    const xb = Math.max(x1, x2, x3, x4);
+    const yb = Math.max(cgl.canvasHeight - y1, cgl.canvasHeight - y2, cgl.canvasHeight - y3, cgl.canvasHeight - y4);
+
+    outTop.set(divY);
+    outLeft.set(divX);
+    outRight.set(xb);
+    outBottom.set(yb);
+
+    divWidth = Math.abs(xb - divX);
+    divHeight = Math.abs(yb - divY);
+
+    divX /= op.patch.cgl.pixelDensity;
+    divY /= op.patch.cgl.pixelDensity;
+    divWidth /= op.patch.cgl.pixelDensity;
+    divHeight /= op.patch.cgl.pixelDensity;
+
+    // div.style.left=divX+'px';
+    // div.style.top=divY+'px';
+    // div.style.width=divWidth+'px';
+    // div.style.height=divHeight+'px';
+
+    const divXpx = divX + "px";
+    const divYpx = divY + "px";
+    const divWidthPx = divWidth + "px";
+    const divHeightPx = divHeight + "px";
+    if (divXpx != div.style.left) div.style.left = divXpx;
+    if (divYpx != div.style.top) div.style.top = divYpx;
+    if (div.style.width != divWidthPx) div.style.width = divWidthPx;
+    if (div.style.height != divHeightPx) div.style.height = divHeightPx;
+}
+
+function updateClassNames()
+{
+    if (div)
+    {
+        div.className = classPort.get();
+    }
+}
+
+op.onDelete = function ()
+{
+    if (div)div.remove();
+};
+
+function setUpDiv()
+{
+    if (!div)
+    {
+        div = document.createElement("div");
+        div.dataset.op = op.id;
+        div.oncontextmenu = function (e)
+        {
+            e.preventDefault();
+        };
+
+        div.style.padding = "0px";
+        div.style.position = "absolute";
+        div.style["box-sizing"] = "border-box";
+        div.style.border = "1px solid red";
+        // div.style['border-left']="1px solid blue";
+        // div.style['border-top']="1px solid green";
+        div.style["z-index"] = "500";
+
+        div.style["-webkit-user-select"] = "none";
+        div.style["user-select"] = "none";
+        div.style["-webkit-tap-highlight-color"] = "rgba(0,0,0,0)";
+        div.style["-webkit-touch-callout"] = "none";
+
+        const canvas = op.patch.cgl.canvas.parentElement;
+        canvas.appendChild(div);
+        updateCursor();
+        updateIsInteractive();
+        updateId();
+        updateClassNames();
+    }
+    updateDivSize();
+    elementPort.set(div);
+}
+
+let listenerElement = null;
+
+function onMouseMove(e)
+{
+    const offsetX = -width.get() / 2;
+    const offsetY = -height.get() / 2;
+
+    outX.set(Math.max(0.0, Math.min(1.0, e.offsetX / divWidth)));
+    outY.set(Math.max(0.0, Math.min(1.0, 1.0 - e.offsetY / divHeight)));
+}
+
+function onMouseLeave(e)
+{
+    mouseDown.set(false);
+    mouseOver.set(false);
+}
+
+function onMouseEnter(e)
+{
+    mouseOver.set(true);
+}
+
+function onMouseDown(e)
+{
+    mouseDown.set(true);
+}
+
+function onMouseUp(e)
+{
+    mouseDown.set(false);
+}
+
+function onmouseclick(e)
+{
+    mouseClick.trigger();
+}
+
+function onTouchMove(e)
+{
+    const targetEle = document.elementFromPoint(e.targetTouches[0].pageX, e.targetTouches[0].pageY);
+
+    if (targetEle == div)
+    {
+        mouseOver.set(true);
+        if (e.touches && e.touches.length > 0)
+        {
+            const rect = div.getBoundingClientRect(); // e.target
+            const x = e.targetTouches[0].pageX - rect.left;
+            const y = e.targetTouches[0].pageY - rect.top;
+
+            const touch = e.touches[0];
+
+            outX.set(Math.max(0.0, Math.min(1.0, x / divWidth)));
+            outY.set(Math.max(0.0, Math.min(1.0, 1.0 - y / divHeight)));
+
+            onMouseMove(touch);
+        }
+    }
+    else
+    {
+        mouseOver.set(false);
+    }
+}
+
+active.onChange = updateActiveRender;
+function updateActiveRender()
+{
+    if (active.get())
+    {
+        addListeners();
+        if (div) div.style.display = "block";
+    }
+    else
+    {
+        removeListeners();
+        if (div) div.style.display = "none";
+    }
+}
+
+isInteractive.onChange = updateIsInteractive;
+function updateIsInteractive()
+{
+    if (isInteractive.get())
+    {
+        addListeners();
+        if (div)div.style["pointer-events"] = "initial";
+    }
+    else
+    {
+        removeListeners();
+        mouseDown.set(false);
+        mouseOver.set(false);
+        if (div)div.style["pointer-events"] = "none";
+    }
+}
+
+function removeListeners()
+{
+    if (listenerElement)
+    {
+        document.removeEventListener("touchmove", onTouchMove);
+        listenerElement.removeEventListener("touchend", onMouseUp);
+        listenerElement.removeEventListener("touchstart", onMouseDown);
+
+        listenerElement.removeEventListener("click", onmouseclick);
+        listenerElement.removeEventListener("mousemove", onMouseMove);
+        listenerElement.removeEventListener("mouseleave", onMouseLeave);
+        listenerElement.removeEventListener("mousedown", onMouseDown);
+        listenerElement.removeEventListener("mouseup", onMouseUp);
+        listenerElement.removeEventListener("mouseenter", onMouseEnter);
+        // listenerElement.removeEventListener('contextmenu', onClickRight);
+        listenerElement = null;
+    }
+}
+
+function addListeners()
+{
+    if (listenerElement)removeListeners();
+
+    listenerElement = div;
+
+    if (listenerElement)
+    {
+        document.addEventListener("touchmove", onTouchMove);
+        listenerElement.addEventListener("touchend", onMouseUp);
+        listenerElement.addEventListener("touchstart", onMouseDown);
+
+        listenerElement.addEventListener("click", onmouseclick);
+        listenerElement.addEventListener("mousemove", onMouseMove);
+        listenerElement.addEventListener("mouseleave", onMouseLeave);
+        listenerElement.addEventListener("mousedown", onMouseDown);
+        listenerElement.addEventListener("mouseup", onMouseUp);
+        listenerElement.addEventListener("mouseenter", onMouseEnter);
+        // listenerElement.addEventListener('contextmenu', onClickRight);
+    }
 }
 
 
 };
 
-Ops.Gl.Render2Texture.prototype = new CABLES.Op();
-CABLES.OPS["d01fa820-396c-4cb5-9d78-6b14762852af"]={f:Ops.Gl.Render2Texture,objName:"Ops.Gl.Render2Texture"};
+Ops.Gl.InteractiveRectangle_v2.prototype = new CABLES.Op();
+CABLES.OPS["334728ca-60a2-4a42-a059-d9b5f3fe4d32"]={f:Ops.Gl.InteractiveRectangle_v2,objName:"Ops.Gl.InteractiveRectangle_v2"};
 
 
 
 
 // **************************************************************
 // 
-// Ops.Html.YoutubePlayer
+// Ops.Gl.DepthTest
 // 
 // **************************************************************
 
-Ops.Html.YoutubePlayer = function()
+Ops.Gl.DepthTest = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={};
+// todo:rename to depthtest
+
+const render = op.inTrigger("Render");
+const enable = op.inValueBool("Enable depth testing", true);
+const meth = op.inValueSelect("Depth Test Method", ["never", "always", "less", "less or equal", "greater", "greater or equal", "equal", "not equal"], "less or equal");
+const write = op.inValueBool("Write to depth buffer", true);
+const trigger = op.outTrigger("Next");
+
+const cgl = op.patch.cgl;
+let compareMethod = cgl.gl.LEQUAL;
+
+meth.onChange = updateFunc;
+
+function updateFunc()
+{
+    if (meth.get() == "never") compareMethod = cgl.gl.NEVER;
+    else if (meth.get() == "always") compareMethod = cgl.gl.ALWAYS;
+    else if (meth.get() == "less") compareMethod = cgl.gl.LESS;
+    else if (meth.get() == "less or equal") compareMethod = cgl.gl.LEQUAL;
+    else if (meth.get() == "greater") compareMethod = cgl.gl.GREATER;
+    else if (meth.get() == "greater or equal") compareMethod = cgl.gl.GEQUAL;
+    else if (meth.get() == "equal") compareMethod = cgl.gl.EQUAL;
+    else if (meth.get() == "not equal") compareMethod = cgl.gl.NOTEQUAL;
+}
+
+render.onTriggered = function ()
+{
+    cgl.pushDepthTest(enable.get());
+    cgl.pushDepthWrite(write.get());
+    cgl.pushDepthFunc(compareMethod);
+
+    trigger.trigger();
+
+    cgl.popDepthTest();
+    cgl.popDepthWrite();
+    cgl.popDepthFunc();
+};
+
+
+};
+
+Ops.Gl.DepthTest.prototype = new CABLES.Op();
+CABLES.OPS["3996ed5d-8143-4bec-9cfd-c1b193a295af"]={f:Ops.Gl.DepthTest,objName:"Ops.Gl.DepthTest"};
+
+
+
+
+// **************************************************************
+// 
+// Ops.Gl.Meshes.Sphere_v2
+// 
+// **************************************************************
+
+Ops.Gl.Meshes.Sphere_v2 = function()
 {
 CABLES.Op.apply(this,arguments);
 const op=this;
 const attachments={};
 const
-    src = op.inString("Video Id", "dQw4w9WgXcQ"),
-    active = op.inBool("Active", true),
-    inStyle = op.inStringEditor("Style"),
-    elId = op.inString("ElementID"),
-    paramAutoplay = op.inBool("Autoplay", false),
-    paramCC = op.inBool("Display Captions", false),
-    paramLoop = op.inBool("Loop", false),
-    paramFs = op.inBool("Allow Fullscreen", true),
-    paramControls = op.inBool("Hide Controls", false),
-    paramStart = op.inInt("Start at Second", 0),
+    TAU = Math.PI * 2,
+    cgl = op.patch.cgl,
+    inTrigger = op.inTrigger("render"),
+    inRadius = op.inValue("radius", 0.5),
+    inStacks = op.inValue("stacks", 32),
+    inSlices = op.inValue("slices", 32),
+    inStacklimit = op.inValueSlider("Filloffset", 1),
+    inDraw = op.inValueBool("Render", true),
+    outTrigger = op.outTrigger("trigger"),
+    outGeometry = op.outObject("geometry", null, "geometry"),
+    UP = vec3.fromValues(0, 1, 0),
+    RIGHT = vec3.fromValues(1, 0, 0);
 
-    outEle = op.outObject("Element"),
-    outDirectLink = op.outString("Direct Link");
-    // outImageMax=op.outString("Thumbnail Max");
+let
+    geom = new CGL.Geometry("Sphere"),
+    tmpNormal = vec3.create(),
+    tmpVec = vec3.create(),
+    needsRebuild = true,
+    mesh;
 
-const defaultStyle = "position:absolute;\n\
-z-index:9;\n\
-border:0;\n";
-
-op.setPortGroup("Youtube Options", [paramAutoplay, paramCC, paramLoop, paramFs, paramControls, paramStart]);
-
-// https://developers.google.com/youtube/player_parameters
-
-let element = null;
-let initialized = false;
-
-paramStart.onChange =
-    paramAutoplay.onChange =
-    paramCC.onChange =
-    paramLoop.onChange =
-    paramFs.onChange =
-    paramControls.onChange =
-    src.onChange = updateURL;
-
-elId.onChange = updateID;
-inStyle.onChange = updateStyle;
-op.onDelete = removeEle;
-
-active.onChange = update;
-
-op.init = function ()
+function buildMesh()
 {
-    initialized = true;
-    setTimeout(() => { update(); }, 100);
+    const
+        stacks = Math.ceil(Math.max(inStacks.get(), 2)),
+        slices = Math.ceil(Math.max(inSlices.get(), 3)),
+        stackLimit = Math.min(Math.max(inStacklimit.get() * stacks, 1), stacks),
+        radius = inRadius.get();
+    let
+        positions = [],
+        texcoords = [],
+        normals = [],
+        tangents = [],
+        biTangents = [],
+        indices = [],
+        x, y, z, d, t, a,
+        o, u, v, i, j;
+    for (i = o = 0; i < stacks + 1; i++)
+    {
+        v = (i / stacks - 0.5) * Math.PI;
+        y = Math.sin(v);
+        a = Math.cos(v);
+        // for (j = 0; j < slices+1; j++) {
+        for (j = slices; j >= 0; j--)
+        {
+            u = (j / slices) * TAU;
+            x = Math.cos(u) * a;
+            z = Math.sin(u) * a;
+
+            positions.push(x * radius, y * radius, z * radius);
+            // texcoords.push(i/(stacks+1),j/slices);
+            texcoords.push(j / slices, i / (stacks + 1));
+
+            d = Math.sqrt(x * x + y * y + z * z);
+            normals.push(
+                tmpNormal[0] = x / d,
+                tmpNormal[1] = y / d,
+                tmpNormal[2] = z / d
+            );
+
+            if (y == d) t = RIGHT;
+            else t = UP;
+            vec3.cross(tmpVec, tmpNormal, t);
+            vec3.normalize(tmpVec, tmpVec);
+            Array.prototype.push.apply(tangents, tmpVec);
+            vec3.cross(tmpVec, tmpVec, tmpNormal);
+            Array.prototype.push.apply(biTangents, tmpVec);
+        }
+        if (i == 0 || i > stackLimit) continue;
+        for (j = 0; j < slices; j++, o++)
+        {
+            indices.push(
+                o, o + 1, o + slices + 1,
+                o + 1, o + slices + 2, o + slices + 1
+            );
+        }
+        o++;
+    }
+
+    // set geometry
+    geom.clear();
+    geom.vertices = positions;
+    geom.texCoords = texcoords;
+    geom.vertexNormals = normals;
+    geom.tangents = tangents;
+    geom.biTangents = biTangents;
+    geom.verticesIndices = indices;
+
+    outGeometry.set(null);
+    outGeometry.set(geom);
+
+    if (!mesh) mesh = new CGL.Mesh(cgl, geom);
+    else mesh.setGeom(geom);
+
+    needsRebuild = false;
+}
+
+// set event handlers
+inTrigger.onTriggered = function ()
+{
+    if (needsRebuild) buildMesh();
+    if (inDraw.get()) mesh.render(cgl.getShader());
+    outTrigger.trigger();
 };
 
-inStyle.set(defaultStyle);
+inStacks.onChange =
+inSlices.onChange =
+inStacklimit.onChange =
+inRadius.onChange = function ()
+{
+    // only calculate once, even after multiple settings could were changed
+    needsRebuild = true;
+};
 
-function update()
+// set lifecycle handlers
+op.onDelete = function () { if (mesh)mesh.dispose(); };
+
+
+};
+
+Ops.Gl.Meshes.Sphere_v2.prototype = new CABLES.Op();
+CABLES.OPS["450b4d68-2278-4d9f-9849-0abdfa37ef69"]={f:Ops.Gl.Meshes.Sphere_v2,objName:"Ops.Gl.Meshes.Sphere_v2"};
+
+
+
+
+// **************************************************************
+// 
+// Ops.Trigger.GateTrigger
+// 
+// **************************************************************
+
+Ops.Trigger.GateTrigger = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={};
+const
+    exe = op.inTrigger('Execute'),
+    passThrough = op.inValueBool('Pass Through',true),
+    triggerOut = op.outTrigger('Trigger out');
+
+exe.onTriggered = function()
+{
+    if(passThrough.get())
+        triggerOut.trigger();
+}
+
+
+};
+
+Ops.Trigger.GateTrigger.prototype = new CABLES.Op();
+CABLES.OPS["65e8b8a2-ba13-485f-883a-2bcf377989da"]={f:Ops.Trigger.GateTrigger,objName:"Ops.Trigger.GateTrigger"};
+
+
+
+
+// **************************************************************
+// 
+// Ops.Trigger.Interval
+// 
+// **************************************************************
+
+Ops.Trigger.Interval = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={};
+const
+    interval = op.inValue("interval"),
+    trigger = op.outTrigger("trigger"),
+    active = op.inValueBool("Active", true);
+
+active.onChange = function ()
 {
     if (!active.get())
     {
-        removeEle();
+        clearTimeout(timeOutId);
+        timeOutId = -1;
+    }
+    else exec();
+};
+
+interval.set(1000);
+let timeOutId = -1;
+
+function exec()
+{
+    if (!active.get()) return;
+    if (timeOutId != -1) return;
+
+    timeOutId = setTimeout(function ()
+    {
+        timeOutId = -1;
+        trigger.trigger();
+        exec();
+    },
+    interval.get());
+}
+
+interval.onChange = exec;
+
+exec();
+
+
+};
+
+Ops.Trigger.Interval.prototype = new CABLES.Op();
+CABLES.OPS["3e9bae10-38af-4e36-9fcc-35faeeaf57f8"]={f:Ops.Trigger.Interval,objName:"Ops.Trigger.Interval"};
+
+
+
+
+// **************************************************************
+// 
+// Ops.Json.ParseObject_v2
+// 
+// **************************************************************
+
+Ops.Json.ParseObject_v2 = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={};
+const
+    str = op.inStringEditor("JSON String", "{}", "json"),
+    outObj = op.outObject("Result"),
+    isValid = op.outValue("Valid");
+
+str.onChange = parse;
+parse();
+
+function parse()
+{
+    if (!str.get())
+    {
+        outObj.set(null);
+        isValid.set(false);
         return;
     }
+    try
+    {
+        const obj = JSON.parse(str.get());
+        outObj.set(null);
+        outObj.set(obj);
+        isValid.set(true);
+        op.setUiError("invalidjson", null);
+    }
+    catch (ex)
+    {
+        op.logError(ex);
+        isValid.set(false);
 
-    addElement();
-}
+        let outStr = "";
+        const parts = ex.message.split(" ");
+        for (let i = 0; i < parts.length - 1; i++)
+        {
+            const num = parseFloat(parts[i + 1]);
+            if (num && parts[i] == "position")
+            {
+                const outStrA = str.get().substring(num - 15, num);
+                const outStrB = str.get().substring(num, num + 1);
+                const outStrC = str.get().substring(num + 1, num + 15);
+                outStr = "<span style=\"font-family:monospace;background-color:black;\">" + outStrA + "<span style=\"font-weight:bold;background-color:red;\">" + outStrB + "</span>" + outStrC + " </span>";
+            }
+        }
 
-function addElement()
-{
-    if (!initialized) return;
-    if (element) removeEle();
-
-    const parent = op.patch.cgl.canvas.parentElement;
-    element = document.createElement("iframe");
-    element.dataset.op = op.id;
-    element.style.position = "absolute";
-    element.allowfullscreen = true;
-    element.frameborder = 0;
-    element.allow = "accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture";
-
-    parent.appendChild(element);
-
-    updateURL();
-    updateID();
-    updateStyle();
-
-    outEle.set(null);
-    outEle.set(element);
-}
-
-function removeEle()
-{
-    if (element && element.parentNode) element.parentNode.removeChild(element);
-    element = null;
-    outEle.set(null);
-}
-
-function updateURL()
-{
-    if (src.get()) outDirectLink.set("https://www.youtube.com/watch?v=" + src.get());
-
-    if (!initialized) return;
-    if (!active.get()) return;
-    const urlParams = [];
-
-    if (paramAutoplay.get()) urlParams.push("autoplay=1");
-    if (paramCC.get()) urlParams.push("cc_load_policy=1");
-    if (paramLoop.get()) urlParams.push("loop=1");
-    if (paramFs.get()) urlParams.push("fs=1");
-    if (paramControls.get()) urlParams.push("controls=0");
-    if (paramStart.get() > 0) urlParams.push("start=" + paramStart.get());
-
-    let urlParamsStr = "";
-    if (urlParams.length > 0) urlParamsStr = "?" + urlParams.join("&") + "&rel=0";
-
-    const urlStr = "https://www.youtube.com/embed/" + src.get() + urlParamsStr;
-    if (element)
-        element.setAttribute("src", urlStr);
-}
-
-function updateID()
-{
-    if (!active.get()) return;
-    if (element) element.setAttribute("id", elId.get());
-}
-
-function updateStyle()
-{
-    if (!active.get()) return;
-    if (element) element.style = inStyle.get();
+        op.setUiError("invalidjson", "INVALID JSON<br/>can not parse string to object:<br/><b> " + ex.message + "</b><br/>" + outStr);
+    }
 }
 
 
 };
 
-Ops.Html.YoutubePlayer.prototype = new CABLES.Op();
-CABLES.OPS["b60ad395-d6ad-4309-86c5-c6bbffaf176c"]={f:Ops.Html.YoutubePlayer,objName:"Ops.Html.YoutubePlayer"};
+Ops.Json.ParseObject_v2.prototype = new CABLES.Op();
+CABLES.OPS["2ce8a4d3-37d3-4cdc-abd1-a560fbe841ee"]={f:Ops.Json.ParseObject_v2,objName:"Ops.Json.ParseObject_v2"};
+
+
+
+
+// **************************************************************
+// 
+// Ops.Ui.VizObject
+// 
+// **************************************************************
+
+Ops.Ui.VizObject = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={};
+const inArr = op.inObject("Object");
+
+op.setUiAttrib({ "height": 200, "width": 400, "resizable": true });
+
+inArr.onLinkChanged = () =>
+{
+    if (inArr.isLinked())
+    {
+        const p = inArr.links[0].getOtherPort(inArr);
+
+        op.setUiAttrib({ "extendTitle": p.uiAttribs.objType });
+    }
+};
+
+op.renderVizLayer = (ctx, layer) =>
+{
+    ctx.fillStyle = "#222";
+    ctx.fillRect(layer.x, layer.y, layer.width, layer.height);
+
+    ctx.save();
+    ctx.scale(layer.scale, layer.scale);
+
+    ctx.font = "normal 10px sourceCodePro";
+    ctx.fillStyle = "#ccc";
+
+    let obj = inArr.get();
+    const padding = 10;
+
+    let str = "???";
+
+    if (obj && obj.getInfo)
+    {
+        obj = obj.getInfo();
+    }
+
+    if (obj instanceof Element)
+    {
+        const o = {};
+
+        o.id = obj.getAttribute("id");
+        o.classes = obj.classList.value;
+        o.innerText = obj.innerText;
+        o.tagName = obj.tagName;
+
+        obj = o;
+    }
+
+    try
+    {
+        str = JSON.stringify(obj, false, 4);
+    }
+    catch (e)
+    {
+        str = "object can not be displayed as string";
+    }
+
+    if (str === undefined)str = "undefined";
+    if (str === null)str = "null";
+    str = String(str);
+    let lines = str.split("\n");
+
+    for (let j = 0; j < lines.length; j++)
+        ctx.fillText(lines[j], layer.x / layer.scale + padding, layer.y / layer.scale + ((j + 1) * 12));
+
+    ctx.restore();
+};
+
+
+};
+
+Ops.Ui.VizObject.prototype = new CABLES.Op();
+CABLES.OPS["d09bc53e-9f52-4872-94c7-4ef777512222"]={f:Ops.Ui.VizObject,objName:"Ops.Ui.VizObject"};
+
+
+
+
+// **************************************************************
+// 
+// Ops.Json.ObjectGetNumberByPath
+// 
+// **************************************************************
+
+Ops.Json.ObjectGetNumberByPath = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={};
+const objectIn = op.inObject("Object");
+const pathIn = op.inString("Path");
+const resultOut = op.outNumber("Output");
+const foundOut = op.outBool("Found");
+
+objectIn.onChange = update;
+pathIn.onChange = update;
+
+function update()
+{
+    const data = objectIn.get();
+    const path = pathIn.get();
+    op.setUiError("missing", null);
+    if (data && path)
+    {
+        if (!Array.isArray(data) && !(typeof data === "object"))
+        {
+            foundOut.set(false);
+            op.setUiError("notiterable", "input object of type " + (typeof data) + " is not travesable by path");
+        }
+        else
+        {
+            op.setUiError("notiterable", null);
+            const parts = path.split(".");
+            op.setUiAttrib({ "extendTitle": parts[parts.length - 1] + "" });
+            let result = resolve(path, data);
+            if (result === undefined)
+            {
+                const errorMsg = "could not find element at path " + path;
+                foundOut.set(false);
+                result = null;
+                op.setUiError("missing", errorMsg, 2);
+            }
+            else if (typeof result !== "number")
+            {
+                const errorMsg = "element at path " + path + " is not a number";
+                foundOut.set(false);
+                result = null;
+                op.setUiError("missing", errorMsg, 2);
+            }
+            else
+            {
+                foundOut.set(true);
+            }
+            resultOut.set(result);
+        }
+    }
+    else
+    {
+        foundOut.set(false);
+    }
+}
+
+function resolve(path, obj = self, separator = ".")
+{
+    const properties = Array.isArray(path) ? path : path.split(separator);
+    return properties.reduce((prev, curr) => prev && prev[curr], obj);
+}
+
+
+};
+
+Ops.Json.ObjectGetNumberByPath.prototype = new CABLES.Op();
+CABLES.OPS["ec736baf-feb8-4d8d-b04c-173fc197759c"]={f:Ops.Json.ObjectGetNumberByPath,objName:"Ops.Json.ObjectGetNumberByPath"};
+
+
+
+
+// **************************************************************
+// 
+// Ops.Json.ObjectGetStringByPath
+// 
+// **************************************************************
+
+Ops.Json.ObjectGetStringByPath = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={};
+const objectIn = op.inObject("Object");
+const pathIn = op.inString("Path");
+const returnPathIn = op.inBool("Output path if missing", false);
+const resultOut = op.outString("Output");
+const foundOut = op.outBool("Found");
+
+objectIn.ignoreValueSerialize = true;
+
+objectIn.onChange = update;
+pathIn.onChange = update;
+returnPathIn.onChange = update;
+
+function update()
+{
+    const data = objectIn.get();
+    const path = pathIn.get();
+    op.setUiError("missing", null);
+    if (data && path)
+    {
+        if (!Array.isArray(data) && !(typeof data === "object"))
+        {
+            foundOut.set(false);
+            op.setUiError("notiterable", "input object of type " + (typeof data) + " is not travesable by path");
+        }
+        else
+        {
+            op.setUiError("notiterable", null);
+            const parts = path.split(".");
+            op.setUiAttrib({ "extendTitle": parts[parts.length - 1] + "" });
+            let result = resolve(path, data);
+            if (result === undefined)
+            {
+                const errorMsg = "could not find element at path " + path;
+                let errorLevel = 2;
+                result = null;
+                foundOut.set(false);
+                if (returnPathIn.get())
+                {
+                    result = path;
+                    errorLevel = 1;
+                }
+                else
+                {
+                    result = null;
+                }
+                op.setUiError("missing", errorMsg, errorLevel);
+            }
+            else
+            {
+                foundOut.set(true);
+                result = String(result);
+            }
+            resultOut.set(result);
+        }
+    }
+    else
+    {
+        foundOut.set(false);
+    }
+}
+
+function resolve(path, obj = self, separator = ".")
+{
+    const properties = Array.isArray(path) ? path : path.split(separator);
+    return properties.reduce((prev, curr) => prev && prev[curr], obj);
+}
+
+
+};
+
+Ops.Json.ObjectGetStringByPath.prototype = new CABLES.Op();
+CABLES.OPS["497a6b7c-e33c-45e4-8fb2-a9149d972b5b"]={f:Ops.Json.ObjectGetStringByPath,objName:"Ops.Json.ObjectGetStringByPath"};
+
+
+
+
+// **************************************************************
+// 
+// Ops.String.FilterValidString
+// 
+// **************************************************************
+
+Ops.String.FilterValidString = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={};
+const
+    inStr = op.inString("String", ""),
+    checkNull = op.inBool("Invalid if null", true),
+    checkUndefined = op.inBool("Invalid if undefined", true),
+    checkEmpty = op.inBool("Invalid if empty", true),
+    checkZero = op.inBool("Invalid if 0", true),
+    outStr = op.outString("Last Valid String"),
+    result = op.outBool("Is Valid");
+
+inStr.onChange =
+checkNull.onChange =
+checkUndefined.onChange =
+checkEmpty.onChange =
+function ()
+{
+    const str = inStr.get();
+    let r = true;
+
+    if (r === false)r = false;
+    if (r && checkZero.get() && (str === 0 || str === "0")) r = false;
+    if (r && checkNull.get() && str === null) r = false;
+    if (r && checkUndefined.get() && str === undefined) r = false;
+    if (r && checkEmpty.get() && str === "") r = false;
+
+    result.set(r);
+    if (r)outStr.set(str);
+};
+
+
+};
+
+Ops.String.FilterValidString.prototype = new CABLES.Op();
+CABLES.OPS["a522235d-f220-46ea-bc26-13a5b20ec8c6"]={f:Ops.String.FilterValidString,objName:"Ops.String.FilterValidString"};
+
+
+
+
+// **************************************************************
+// 
+// Ops.Trigger.TriggerSend
+// 
+// **************************************************************
+
+Ops.Trigger.TriggerSend = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={};
+const trigger = op.inTriggerButton("Trigger");
+op.varName = op.inValueSelect("Named Trigger", [], "", true);
+
+op.varName.onChange = updateName;
+
+trigger.onTriggered = doTrigger;
+
+op.patch.addEventListener("namedTriggersChanged", updateVarNamesDropdown);
+
+updateVarNamesDropdown();
+
+function updateVarNamesDropdown()
+{
+    if (CABLES.UI)
+    {
+        const varnames = [];
+        const vars = op.patch.namedTriggers;
+        varnames.push("+ create new one");
+        for (const i in vars) varnames.push(i);
+        op.varName.uiAttribs.values = varnames;
+    }
+}
+
+function updateName()
+{
+    if (CABLES.UI)
+    {
+        if (op.varName.get() == "+ create new one")
+        {
+            new CABLES.UI.ModalDialog({
+                "prompt": true,
+                "title": "New Trigger",
+                "text": "enter a name for the new trigger",
+                "promptValue": "",
+                "promptOk": (str) =>
+                {
+                    op.varName.set(str);
+                    op.patch.namedTriggers[str] = op.patch.namedTriggers[str] || [];
+                    updateVarNamesDropdown();
+                }
+            });
+            return;
+        }
+
+        op.refreshParams();
+    }
+
+    if (!op.patch.namedTriggers[op.varName.get()])
+    {
+        op.patch.namedTriggers[op.varName.get()] = op.patch.namedTriggers[op.varName.get()] || [];
+        op.patch.emitEvent("namedTriggersChanged");
+    }
+
+    op.setTitle(">" + op.varName.get());
+
+    op.refreshParams();
+    op.patch.emitEvent("opTriggerNameChanged", op, op.varName.get());
+}
+
+function doTrigger()
+{
+    const arr = op.patch.namedTriggers[op.varName.get()];
+    // fire an event even if noone is receiving this trigger
+    // this way TriggerReceiveFilter can still handle it
+    op.patch.emitEvent("namedTriggerSent", op.varName.get());
+
+    if (!arr)
+    {
+        op.setUiError("unknowntrigger", "unknown trigger");
+        return;
+    }
+    else op.setUiError("unknowntrigger", null);
+
+    for (let i = 0; i < arr.length; i++)
+    {
+        arr[i]();
+    }
+}
+
+
+};
+
+Ops.Trigger.TriggerSend.prototype = new CABLES.Op();
+CABLES.OPS["ce1eaf2b-943b-4dc0-ab5e-ee11b63c9ed0"]={f:Ops.Trigger.TriggerSend,objName:"Ops.Trigger.TriggerSend"};
+
+
+
+
+// **************************************************************
+// 
+// Ops.Trigger.TriggerReceive
+// 
+// **************************************************************
+
+Ops.Trigger.TriggerReceive = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={};
+const next = op.outTrigger("Triggered");
+op.varName = op.inValueSelect("Named Trigger", [], "", true);
+
+updateVarNamesDropdown();
+op.patch.addEventListener("namedTriggersChanged", updateVarNamesDropdown);
+
+let oldName = null;
+
+function doTrigger()
+{
+    next.trigger();
+}
+
+function updateVarNamesDropdown()
+{
+    if (CABLES.UI)
+    {
+        let varnames = [];
+        let vars = op.patch.namedTriggers;
+        // varnames.push('+ create new one');
+        for (let i in vars) varnames.push(i);
+        op.varName.uiAttribs.values = varnames;
+    }
+}
+
+op.varName.onChange = function ()
+{
+    if (oldName)
+    {
+        let oldCbs = op.patch.namedTriggers[oldName];
+        let a = oldCbs.indexOf(doTrigger);
+        if (a != -1) oldCbs.splice(a, 1);
+    }
+
+    op.setTitle(">" + op.varName.get());
+    op.patch.namedTriggers[op.varName.get()] = op.patch.namedTriggers[op.varName.get()] || [];
+    let cbs = op.patch.namedTriggers[op.varName.get()];
+
+    cbs.push(doTrigger);
+    oldName = op.varName.get();
+    updateError();
+    op.patch.emitEvent("opTriggerNameChanged", op, op.varName.get());
+};
+
+op.on("uiParamPanel", updateError);
+
+function updateError()
+{
+    if (!op.varName.get())
+    {
+        op.setUiError("unknowntrigger", "unknown trigger");
+    }
+    else op.setUiError("unknowntrigger", null);
+}
+
+
+};
+
+Ops.Trigger.TriggerReceive.prototype = new CABLES.Op();
+CABLES.OPS["0816c999-f2db-466b-9777-2814573574c5"]={f:Ops.Trigger.TriggerReceive,objName:"Ops.Trigger.TriggerReceive"};
+
+
+
+
+// **************************************************************
+// 
+// Ops.Math.Interpolate
+// 
+// **************************************************************
+
+Ops.Math.Interpolate = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={};
+const
+    val1 = op.inFloat("Value 1"),
+    val2 = op.inFloat("Value 2"),
+    perc = op.inFloatSlider("Percentage"),
+    result = op.outNumber("Result");
+
+val1.onChange =
+val2.onChange =
+perc.onChange = update;
+
+function update()
+{
+    result.set((val2.get() - val1.get()) * perc.get() + val1.get());
+}
+
+
+};
+
+Ops.Math.Interpolate.prototype = new CABLES.Op();
+CABLES.OPS["d126e2c8-221e-428f-8ff4-8b8c5f6b8905"]={f:Ops.Math.Interpolate,objName:"Ops.Math.Interpolate"};
+
+
+
+
+// **************************************************************
+// 
+// Ops.Trigger.TriggerOnChangeString
+// 
+// **************************************************************
+
+Ops.Trigger.TriggerOnChangeString = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={};
+const
+    inval = op.inString("String"),
+    next = op.outTrigger("Changed"),
+    outStr = op.outString("Result");
+
+inval.onChange = function ()
+{
+    outStr.set(inval.get());
+    next.trigger();
+};
+
+
+};
+
+Ops.Trigger.TriggerOnChangeString.prototype = new CABLES.Op();
+CABLES.OPS["319d07e0-5cbe-4bc1-89fb-a934fd41b0c4"]={f:Ops.Trigger.TriggerOnChangeString,objName:"Ops.Trigger.TriggerOnChangeString"};
+
+
+
+
+// **************************************************************
+// 
+// Ops.Gl.Phong.DirectionalLight_v5
+// 
+// **************************************************************
+
+Ops.Gl.Phong.DirectionalLight_v5 = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={};
+const cgl = op.patch.cgl;
+
+// * OP START *
+const inTrigger = op.inTrigger("Trigger In");
+
+const inCastLight = op.inBool("Cast Light", true);
+const inIntensity = op.inFloat("Intensity", 1);
+const attribIns = [inCastLight, inIntensity];
+op.setPortGroup("Light Attributes", attribIns);
+
+const inPosX = op.inFloat("X", 0);
+const inPosY = op.inFloat("Y", 3);
+const inPosZ = op.inFloat("Z", 5);
+
+const positionIn = [inPosX, inPosY, inPosZ];
+op.setPortGroup("Direction", positionIn);
+
+const inR = op.inFloat("R", 1);
+const inG = op.inFloat("G", 1);
+const inB = op.inFloat("B", 1);
+
+inR.setUiAttribs({ "colorPick": true });
+const colorIn = [inR, inG, inB];
+op.setPortGroup("Color", colorIn);
+
+const inSpecularR = op.inFloat("Specular R", 0.2);
+const inSpecularG = op.inFloat("Specular G", 0.2);
+const inSpecularB = op.inFloat("Specular B", 0.2);
+
+inSpecularR.setUiAttribs({ "colorPick": true });
+const colorSpecularIn = [inSpecularR, inSpecularG, inSpecularB];
+op.setPortGroup("Specular Color", colorSpecularIn);
+
+const inCastShadow = op.inBool("Cast Shadow", false);
+const inRenderMapActive = op.inBool("Rendering Active", true);
+const inMapSize = op.inSwitch("Map Size", [256, 512, 1024, 2048], 512);
+const inShadowStrength = op.inFloatSlider("Shadow Strength", 1);
+const inLRBT = op.inFloat("LR-BottomTop", 8);
+const inNear = op.inFloat("Near", 0.1);
+const inFar = op.inFloat("Far", 30);
+const inBias = op.inFloatSlider("Bias", 0.004);
+const inPolygonOffset = op.inInt("Polygon Offset", 0);
+const inNormalOffset = op.inFloatSlider("Normal Offset", 0);
+const inBlur = op.inFloatSlider("Blur Amount", 0);
+op.setPortGroup("", [inCastShadow]);
+op.setPortGroup("Shadow Map Settings", [inMapSize, inRenderMapActive, inShadowStrength, inLRBT, inNear, inFar, inBias, inPolygonOffset, inNormalOffset, inBlur]);
+
+inMapSize.setUiAttribs({ "greyout": true });
+inRenderMapActive.setUiAttribs({ "greyout": true });
+inShadowStrength.setUiAttribs({ "greyout": true });
+inLRBT.setUiAttribs({ "greyout": true, "hidePort": true });
+inNear.setUiAttribs({ "greyout": true, "hidePort": true });
+inFar.setUiAttribs({ "greyout": true, "hidePort": true });
+inBias.setUiAttribs({ "greyout": true, "hidePort": true });
+inNormalOffset.setUiAttribs({ "greyout": true, "hidePort": true });
+inPolygonOffset.setUiAttribs({ "greyout": true, "hidePort": true });
+inBlur.setUiAttribs({ "greyout": true });
+
+const inAdvanced = op.inBool("Enable Advanced", false);
+const inMSAA = op.inSwitch("MSAA", ["none", "2x", "4x", "8x"], "none");
+const inFilterType = op.inSwitch("Texture Filter", ["Linear", "Nearest", "Mip Map"], "Linear");
+const inAnisotropic = op.inSwitch("Anisotropic", [0, 1, 2, 4, 8, 16], "0");
+inMSAA.setUiAttribs({ "greyout": true, "hidePort": true });
+inFilterType.setUiAttribs({ "greyout": true, "hidePort": true });
+inAnisotropic.setUiAttribs({ "greyout": true, "hidePort": true });
+op.setPortGroup("Advanced Options", [inAdvanced, inMSAA, inFilterType, inAnisotropic]);
+
+inAdvanced.onChange = function ()
+{
+    inMSAA.setUiAttribs({ "greyout": !inAdvanced.get() });
+    inFilterType.setUiAttribs({ "greyout": !inAdvanced.get() });
+    inAnisotropic.setUiAttribs({ "greyout": !inAdvanced.get() });
+};
+
+const outTrigger = op.outTrigger("Trigger Out");
+const outTexture = op.outTexture("Shadow Map");
+
+let texelSize = 1 / Number(inMapSize.get());
+
+const newLight = new CGL.Light(cgl, {
+    "type": "directional",
+    "position": [0, 1, 2].map(function (i) { return positionIn[i].get(); }),
+    "color": [0, 1, 2].map(function (i) { return colorIn[i].get(); }),
+    "specular": [0, 1, 2].map(function (i) { return colorSpecularIn[i].get(); }),
+    "intensity": inIntensity.get(),
+    "castShadow": false,
+    "shadowStrength": inShadowStrength.get(),
+});
+newLight.castLight = inCastLight.get();
+
+let updating = false;
+
+function updateBuffers()
+{
+    updating = true;
+    const MSAA = Number(inMSAA.get().charAt(0));
+
+    let filterType = null;
+    const anisotropyFactor = Number(inAnisotropic.get());
+
+    if (inFilterType.get() == "Linear")
+    {
+        filterType = CGL.Texture.FILTER_LINEAR;
+    }
+    else if (inFilterType.get() == "Nearest")
+    {
+        filterType = CGL.Texture.FILTER_NEAREST;
+    }
+    else if (inFilterType.get() == "Mip Map")
+    {
+        filterType = CGL.Texture.FILTER_MIPMAP;
+    }
+
+    const mapSize = Number(inMapSize.get());
+    const textureOptions = {
+        "isFloatingPointTexture": true,
+        "filter": filterType,
+    };
+
+    if (MSAA) Object.assign(textureOptions, { "multisampling": true, "multisamplingSamples": MSAA });
+    Object.assign(textureOptions, { "anisotropic": anisotropyFactor });
+
+    newLight.createFramebuffer(mapSize, mapSize, textureOptions);
+    newLight.createBlurEffect(textureOptions);
+    updating = false;
+}
+
+function updateShadowMapFramebuffer()
+{
+    const size = Number(inMapSize.get());
+    texelSize = 1 / size;
+
+    if (inCastShadow.get())
+    {
+        newLight.createFramebuffer(Number(inMapSize.get()), Number(inMapSize.get()), {});
+        newLight.createShadowMapShader();
+        newLight.createBlurEffect({});
+        newLight.createBlurShader();
+        newLight.updateProjectionMatrix(inLRBT.get(), inNear.get(), inFar.get(), null);
+    }
+
+    if (inAdvanced.get()) updateBuffers();
+
+    updating = false;
+    updateLight = true;
+}
+
+inMSAA.onChange = inAnisotropic.onChange = inFilterType.onChange = inMapSize.onChange = function ()
+{
+    updating = true;
+};
+
+inR.onChange = inG.onChange = inB.onChange = inSpecularR.onChange = inSpecularG.onChange = inSpecularB.onChange
+= inPosX.onChange = inPosY.onChange = inPosZ.onChange
+= inBias.onChange = inIntensity.onChange = inCastLight.onChange = inShadowStrength.onChange = inNormalOffset.onChange = updateLightParameters;
+
+let updateLight = false;
+function updateLightParameters(param)
+{
+    updateLight = true;
+}
+
+inCastShadow.onChange = function ()
+{
+    updating = true;
+    updateLight = true;
+
+    const castShadow = inCastShadow.get();
+
+    inMapSize.setUiAttribs({ "greyout": !castShadow });
+    inRenderMapActive.setUiAttribs({ "greyout": !castShadow });
+    inShadowStrength.setUiAttribs({ "greyout": !castShadow });
+    inLRBT.setUiAttribs({ "greyout": !castShadow });
+    inNear.setUiAttribs({ "greyout": !castShadow });
+    inFar.setUiAttribs({ "greyout": !castShadow });
+    inBlur.setUiAttribs({ "greyout": !castShadow });
+    inBias.setUiAttribs({ "greyout": !castShadow });
+    inNormalOffset.setUiAttribs({ "greyout": !castShadow });
+    inPolygonOffset.setUiAttribs({ "greyout": !castShadow });
+};
+
+inLRBT.onChange = inNear.onChange = inFar.onChange = function ()
+{
+    updateLight = true;
+};
+
+function drawHelpers()
+{
+    if (cgl.shouldDrawHelpers(op))
+    {
+        gui.setTransformGizmo({
+            "posX": inPosX,
+            "posY": inPosY,
+            "posZ": inPosZ,
+        });
+        CABLES.GL_MARKER.drawLineSourceDest(
+            op,
+            -200 * newLight.position[0],
+            -200 * newLight.position[1],
+            -200 * newLight.position[2],
+            200 * newLight.position[0],
+            200 * newLight.position[1],
+            200 * newLight.position[2],
+        );
+    }
+}
+
+let errorActive = false;
+inTrigger.onTriggered = function ()
+{
+    if (updating)
+    {
+        if (cgl.frameStore.shadowPass) return;
+        updateShadowMapFramebuffer();
+    }
+
+    if (!cgl.frameStore.shadowPass)
+    {
+        if (!newLight.isUsed && !errorActive)
+        {
+            op.setUiError("lightUsed", "No operator is using this light. Make sure this op is positioned before an operator that uses lights. Also make sure there is an operator that uses lights after this.", 1); // newLight.isUsed = false;
+            errorActive = true;
+        }
+        else if (!newLight.isUsed && errorActive) {}
+        else if (newLight.isUsed && errorActive)
+        {
+            op.setUiError("lightUsed", null);
+            errorActive = false;
+        }
+        else if (newLight.isUsed && !errorActive) {}
+        newLight.isUsed = false;
+    }
+
+    if (updateLight)
+    {
+        newLight.color = [inR.get(), inG.get(), inB.get()];
+        newLight.specular = [inSpecularR.get(), inSpecularG.get(), inSpecularB.get()];
+        newLight.intensity = inIntensity.get();
+        newLight.castLight = inCastLight.get();
+        newLight.position = [inPosX.get(), inPosY.get(), inPosZ.get()];
+        newLight.updateProjectionMatrix(inLRBT.get(), inNear.get(), inFar.get(), null);
+        newLight.castShadow = inCastShadow.get();
+
+        newLight.normalOffset = inNormalOffset.get();
+        newLight.shadowBias = inBias.get();
+        newLight.shadowStrength = inShadowStrength.get();
+        updateLight = false;
+    }
+
+    if (!cgl.frameStore.lightStack) cgl.frameStore.lightStack = [];
+
+    if (!cgl.frameStore.shadowPass) drawHelpers();
+
+    cgl.frameStore.lightStack.push(newLight);
+
+    if (inCastShadow.get())
+    {
+        const blurAmount = 1.5 * inBlur.get() * texelSize;
+        if (inRenderMapActive.get()) newLight.renderPasses(inPolygonOffset.get(), blurAmount, function () { outTrigger.trigger(); });
+        newLight.blurAmount = inBlur.get();
+        outTexture.set(null);
+        outTexture.set(newLight.getShadowMapDepth());
+        // remove light from stack and readd it with shadow map & mvp matrix
+        cgl.frameStore.lightStack.pop();
+
+        cgl.frameStore.lightStack.push(newLight);
+    }
+    else
+    {
+        outTexture.set(null);
+    }
+
+    outTrigger.trigger();
+
+    cgl.frameStore.lightStack.pop();
+};
+
+
+};
+
+Ops.Gl.Phong.DirectionalLight_v5.prototype = new CABLES.Op();
+CABLES.OPS["9f41bf91-f4e0-4ce4-89d8-72627b76261e"]={f:Ops.Gl.Phong.DirectionalLight_v5,objName:"Ops.Gl.Phong.DirectionalLight_v5"};
+
+
+
+
+// **************************************************************
+// 
+// Ops.Value.DelayedValue
+// 
+// **************************************************************
+
+Ops.Value.DelayedValue = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={};
+const
+    exe = op.inTrigger("Update"),
+    v = op.inValue("Value", 0),
+    delay = op.inValue("Delay", 0.5),
+    result = op.outValue("Result", 0),
+    clear = op.inValueBool("Clear on Change", false);
+
+const anim = new CABLES.Anim();
+anim.createPort(op, "easing", function () {}).set("absolute");
+
+exe.onTriggered = function ()
+{
+    result.set(anim.getValue(op.patch.freeTimer.get()) || 0);
+};
+
+v.onChange = function ()
+{
+    const current = anim.getValue(op.patch.freeTimer.get());
+    const t = op.patch.freeTimer.get();
+
+    if (clear.get()) anim.clear(t);
+
+    anim.setValue(t + delay.get(), v.get());
+
+    let lastKey = 0;
+    for (let i = 0; i < anim.keys.length; i++)
+    {
+        if (anim.keys[i].time < t)lastKey = i;
+    }
+    if (lastKey > 2) anim.keys.splice(0, lastKey);
+};
+
+
+};
+
+Ops.Value.DelayedValue.prototype = new CABLES.Op();
+CABLES.OPS["8e7741e0-0b1b-40f3-a62c-ac8a8828dffb"]={f:Ops.Value.DelayedValue,objName:"Ops.Value.DelayedValue"};
+
+
+
+
+// **************************************************************
+// 
+// Ops.Value.SwitchNumberOnTrigger
+// 
+// **************************************************************
+
+Ops.Value.SwitchNumberOnTrigger = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={};
+var triggers=[];
+
+var currentVal=op.outValue("Value");
+var oldVal=op.outValue("Last Value");
+
+var triggered=op.outTrigger("Triggered");
+
+var inVals=[];
+var inExes=[];
+
+function onTrigger()
+{
+    oldVal.set(currentVal.get());
+    currentVal.set( inVals[this.slot].get() );
+    triggered.trigger();
+}
+
+var num=8;
+for(var i=0;i<num;i++)
+{
+    var newExe=op.addInPort(new CABLES.Port(op,"Trigger "+i,CABLES.OP_PORT_TYPE_FUNCTION));
+    newExe.slot=i;
+    newExe.onTriggered=onTrigger.bind(newExe);
+    var newVal=op.addInPort(new CABLES.Port(op,"Value "+i,CABLES.OP_PORT_TYPE_VALUE));
+    inVals.push( newVal );
+}
+
+var defaultVal = op.inValueString("Default Value");
+
+currentVal.set(defaultVal.get());
+oldVal.set(defaultVal.get());
+
+defaultVal.onChange = function(){
+    oldVal.set(currentVal.get());
+    currentVal.set(defaultVal.get());  
+};
+
+
+
+
+
+};
+
+Ops.Value.SwitchNumberOnTrigger.prototype = new CABLES.Op();
+CABLES.OPS["338032c5-bf47-454b-8ae1-cd91f17e5c5b"]={f:Ops.Value.SwitchNumberOnTrigger,objName:"Ops.Value.SwitchNumberOnTrigger"};
 
 
 
