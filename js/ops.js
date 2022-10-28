@@ -12621,1062 +12621,6 @@ CABLES.OPS["5b244b6e-c505-4743-b2cc-8119ef720028"]={f:Ops.Anim.SimpleAnim,objNam
 
 // **************************************************************
 // 
-// Ops.Cables.CustomOp_v2
-// 
-// **************************************************************
-
-Ops.Cables.CustomOp_v2 = function()
-{
-CABLES.Op.apply(this,arguments);
-const op=this;
-const attachments={};
-const defaultCode = "\
-// you can use custom javascript code here, it will be bound to the\n\
-// scope of the current op, which is available as `op`.\n\
-// \n\
-// have a look at the documentation at:\n\
-// https://docs.cables.gl/dev_hello_op/dev_hello_op.html\n\
-\n\
-";
-
-const inJS = op.inStringEditor("JavaScript");
-inJS.setUiAttribs({ "editorSyntax": "js" });
-inJS.set(defaultCode);
-const inLib = op.inUrl("Library", [".js"]);
-
-const portsData = op.inString("portsData", "{}");
-portsData.setUiAttribs({ "hidePort": true });
-portsData.setUiAttribs({ "hideParam": true });
-const protectedPorts = [inJS.id, inLib.id, portsData.id];
-
-let wasPasted = false;
-
-op.setUiError("error", null);
-
-const init = function ()
-{
-    if (op.uiAttribs)
-    {
-        wasPasted = op.uiAttribs.pasted;
-    }
-    restorePorts();
-    loadLibAndExecute();
-    inLib.onChange = inJS.onChange = loadLibAndExecute;
-    if (wasPasted) wasPasted = false;
-};
-
-op.onLoadedValueSet = init;
-op.patch.on("onOpAdd", (newOp, fromDeserizalize) =>
-{
-    if (op == newOp && !fromDeserizalize)
-    {
-        init();
-    }
-});
-
-op.onError = function (ex)
-{
-    if (op.patch.isEditorMode())
-    {
-        op.setUiError("error", ex);
-        const str = inJS.get();
-        const badLines = [];
-        let htmlWarning = "";
-        const lines = str.match(/^.*((\r\n|\n|\r)|$)/gm);
-
-        let anonLine = "";
-        const exLines = ex.stack.split("\n");
-        for (let i = 0; i < exLines.length; i++)
-        {
-            // firefox
-            if (exLines[i].includes("Function:"))
-            {
-                anonLine = exLines[i];
-                break;
-            }
-            // chrome
-            if (exLines[i].includes("anonymous"))
-            {
-                anonLine = exLines[i];
-                break;
-            }
-        }
-
-        let lineFields = anonLine.split(":");
-        let errorLine = lineFields[lineFields.length - 2];
-
-        badLines.push(errorLine - 2);
-
-        for (const i in lines)
-        {
-            const j = parseInt(i, 10) + 1;
-            const line = j + ": " + lines[i];
-
-            let isBadLine = false;
-            for (const bj in badLines)
-                if (badLines[bj] == j) isBadLine = true;
-
-            if (isBadLine) htmlWarning += "<span class=\"error\">";
-            htmlWarning += line.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("\"", "&quot;")
-                .replaceAll("'", "&#039;");
-            if (isBadLine) htmlWarning += "</span>";
-        }
-
-        ex.customMessage = htmlWarning;
-        ex.stack = "";
-        op.patch.emitEvent("exceptionOp", ex, op.name);
-    }
-};
-
-const getEvalFunction = () =>
-{
-    op.setUiError("error", null);
-    let errorEl = document.getElementById("customop-error-" + op.id);
-    if (errorEl)
-    {
-        errorEl.remove();
-    }
-    try
-    {
-        return new Function("op", inJS.get());
-    }
-    catch (err)
-    {
-        op.onError(err);
-        if (op.patch.isEditorMode())
-        {
-            errorEl = document.createElement("script");
-            errorEl.id = "customop-error-" + op.id;
-            errorEl.type = "text/javascript";
-            errorEl.innerHTML = inJS.get();
-            document.body.appendChild(errorEl);
-        }
-        else
-        {
-            op.logError("error creating javascript function", err);
-        }
-        return null;
-    }
-};
-
-function loadLibAndExecute()
-{
-    if (inLib.get())
-    {
-        let scriptTag = document.getElementById("customop_lib_" + op.id);
-        if (scriptTag)
-        {
-            scriptTag.remove();
-        }
-        scriptTag = document.createElement("script");
-        scriptTag.id = "customlib_" + op.id;
-        scriptTag.type = "text/javascript";
-        scriptTag.src = op.patch.getFilePath(String(inLib.get()));
-        scriptTag.onload = function ()
-        {
-            op.logVerbose("done loading library", inLib.get());
-            execute();
-        };
-        document.body.appendChild(scriptTag);
-    }
-    else if (inJS.get() && inJS.get() !== defaultCode)
-    {
-        execute();
-    }
-}
-
-const removeInPort = (port) =>
-{
-    port.removeLinks();
-    for (let ipi = 0; ipi < op.portsIn.length; ipi++)
-    {
-        if (op.portsIn[ipi] == port)
-        {
-            op.portsIn.splice(ipi, 1);
-            return;
-        }
-    }
-};
-
-const removeOutPort = (port) =>
-{
-    port.removeLinks();
-    for (let ipi = 0; ipi < op.portsOut.length; ipi++)
-    {
-        if (op.portsOut[ipi] == port)
-        {
-            op.portsOut.splice(ipi, 1);
-            return;
-        }
-    }
-};
-
-const execute = () =>
-{
-    const evalFunction = getEvalFunction();
-    if (evalFunction)
-    {
-        try
-        {
-            const oldLinksIn = {};
-            const oldValuesIn = {};
-            const oldLinksOut = {};
-            const removeInPorts = [];
-            const removeOutPorts = [];
-            op.portsIn.forEach((port) =>
-            {
-                if (!protectedPorts.includes(port.id))
-                {
-                    oldLinksIn[port.name] = [];
-                    oldValuesIn[port.name] = port.get();
-                    port.links.forEach((link) =>
-                    {
-                        const linkInfo = {
-                            "op": link.portOut.parent,
-                            "portName": link.portOut.name
-                        };
-                        oldLinksIn[port.name].push(linkInfo);
-                    });
-                    removeInPorts.push(port);
-                }
-            });
-            op.portsOut.forEach((port) =>
-            {
-                oldLinksOut[port.name] = [];
-                port.links.forEach((link) =>
-                {
-                    const linkInfo = {
-                        "op": link.portIn.parent,
-                        "portName": link.portIn.name
-                    };
-                    oldLinksOut[port.name].push(linkInfo);
-                });
-                removeOutPorts.push(port);
-            });
-            removeInPorts.forEach((port) =>
-            {
-                removeInPort(port);
-            });
-            removeOutPorts.forEach((port) =>
-            {
-                removeOutPort(port);
-            });
-            if (removeOutPorts.length > 0 || removeInPorts.length > 0)
-            {
-                this.fireEvent("onUiAttribsChange", {});
-                this.fireEvent("onPortRemoved", {});
-            }
-            evalFunction(this);
-
-            op.portsIn.forEach((port) =>
-            {
-                if (!protectedPorts.includes(port.id))
-                {
-                    port.onLinkChanged = savePortData;
-
-                    if (oldLinksIn[port.name])
-                    {
-                        oldLinksIn[port.name].forEach((link) =>
-                        {
-                            op.patch.link(op, port.name, link.op, link.portName);
-                        });
-                    }
-
-                    if (typeof port.onChange == "function")
-                    {
-                        const oldHandler = port.onChange;
-                        port.onChange = (p, v) =>
-                        {
-                            if (!port.isLinked()) savePortData();
-                            oldHandler(p, v);
-                        };
-                    }
-                    else
-                    {
-                        port.onChange = () =>
-                        {
-                            if (!port.isLinked()) savePortData();
-                        };
-                    }
-
-                    // for backwards compatibility, do not add default handler (handled above)
-                    if (typeof port.onValueChanged == "function")
-                    {
-                        const oldValueHandler = port.onValueChanged;
-                        port.onValueChanged = (p, v) =>
-                        {
-                            if (!port.isLinked()) savePortData();
-                            oldValueHandler(p, v);
-                        };
-                    }
-
-                    if (oldValuesIn[port.name])
-                    {
-                        port.set(oldValuesIn[port.name]);
-                    }
-                }
-            });
-            op.portsOut.forEach((port) =>
-            {
-                port.onLinkChanged = savePortData;
-
-                if (oldLinksOut[port.name])
-                {
-                    oldLinksOut[port.name].forEach((link) =>
-                    {
-                        op.patch.link(op, port.name, link.op, link.portName);
-                    });
-                }
-            });
-            if (wasPasted)
-            {
-                wasPasted = false;
-            }
-            savePortData();
-        }
-        catch (e)
-        {
-            if (op.patch.isEditorMode())
-            {
-                op.onError(e);
-                const name = "Ops.Custom.CUSTOM" + op.id.replace(/-/g, "");
-                const code = inJS.get();
-                let codeHead = "Ops.Custom = Ops.Custom || {};\n";
-                codeHead += name + " = " + name + " || {};\n";
-                codeHead += name + " = function()\n{\nCABLES.Op.apply(this,arguments);\nconst op=this;\n";
-                let codeFoot = "\n\n};\n\n" + name + ".prototype = new CABLES.Op();\n";
-                codeFoot += "new " + name + "();\n";
-                const opCode = codeHead + code + codeFoot;
-                const errorEl = document.createElement("script");
-                errorEl.id = "customop-error-" + op.id;
-                errorEl.type = "text/javascript";
-                errorEl.innerHTML = opCode;
-                document.body.appendChild(errorEl);
-            }
-            else
-            {
-                op.logError("error executing javascript code", e);
-            }
-        }
-    }
-};
-
-function savePortData()
-{
-    const newPortsData = { "portsIn": {}, "portsOut": {} };
-    op.portsIn.forEach((port) =>
-    {
-        if (!protectedPorts.includes(port.id))
-        {
-            let v = port.get();
-            if (port.ignoreValueSerialize)v = null;
-            const portData = {
-                "name": port.name,
-                "title": port.title,
-                "value": v,
-                "type": port.type,
-                "links": []
-            };
-            port.links.forEach((link) =>
-            {
-                const linkData = {
-                    "objOut": link.portOut.parent.id,
-                    "portOut": link.portOut.name
-                };
-                portData.links.push(linkData);
-            });
-            newPortsData.portsIn[port.name] = portData;
-        }
-    });
-
-    op.portsOut.forEach((port) =>
-    {
-        if (!protectedPorts.includes(port.id))
-        {
-            let v = port.get();
-            if (port.ignoreValueSerialize)v = null;
-
-            const portData = {
-                "name": port.name,
-                "title": port.title,
-                "value": v,
-                "type": port.type,
-                "links": []
-            };
-            port.links.forEach((link) =>
-            {
-                const linkData = {
-                    "objIn": link.portIn.parent.id,
-                    "portIn": link.portIn.name
-                };
-                portData.links.push(linkData);
-            });
-            newPortsData.portsOut[port.name] = portData;
-        }
-    });
-
-    let serializedPortsData = "{}";
-    try
-    {
-        serializedPortsData = JSON.stringify(newPortsData);
-    }
-    catch (e)
-    {
-        op.log("failed to stringify new port data", newPortsData);
-    }
-    portsData.set(serializedPortsData);
-}
-
-const getOldPorts = () =>
-{
-    const jsonData = portsData.get();
-    let oldPorts = {};
-    try
-    {
-        oldPorts = JSON.parse(jsonData);
-    }
-    catch (e)
-    {
-        op.log("failed to parse old port data", jsonData);
-    }
-
-    let oldPortsIn = {};
-    let oldPortsOut = {};
-
-    if (oldPorts.portsOut)
-    {
-        oldPortsOut = oldPorts.portsOut;
-    }
-    if (oldPorts.portsIn)
-    {
-        oldPortsIn = oldPorts.portsIn;
-    }
-    return { "portsIn": oldPortsIn, "portsOut": oldPortsOut };
-};
-
-const restorePorts = () =>
-{
-    const oldPorts = getOldPorts();
-    const portInKeys = Object.keys(oldPorts.portsIn);
-    if (op.patch.isEditorMode()) CABLES.UI.undo.pause();
-    for (let i = 0; i < portInKeys.length; i++)
-    {
-        const oldPortIn = oldPorts.portsIn[portInKeys[i]];
-        const newPort = op.addInPort(new CABLES.Port(op, oldPortIn.name, oldPortIn.type));
-
-        if (!wasPasted && Array.isArray(oldPortIn.links))
-        {
-            oldPortIn.links.forEach((link) =>
-            {
-                let parent = op.patch.getOpById(link.objOut);
-                if (parent)
-                {
-                    op.patch.link(parent, link.portOut, op, newPort.name);
-                }
-            });
-        }
-        if (!newPort.isLinked())
-        {
-            newPort.set(oldPortIn.value);
-        }
-        newPort.onLinkChanged = savePortData;
-
-        if (oldPortIn.title)
-        {
-            newPort.setUiAttribs({ "title": oldPortIn.title });
-        }
-    }
-
-    const portOutKeys = Object.keys(oldPorts.portsOut);
-    for (let i = 0; i < portOutKeys.length; i++)
-    {
-        const oldPortOut = oldPorts.portsOut[portOutKeys[i]];
-        const newPort = op.addOutPort(new CABLES.Port(op, oldPortOut.name, oldPortOut.type));
-        if (!wasPasted && Array.isArray(oldPortOut.links))
-        {
-            oldPortOut.links.forEach((link) =>
-            {
-                let parent = op.patch.getOpById(link.objIn);
-                if (parent)
-                {
-                    op.patch.link(op, newPort.name, parent, link.portIn);
-                }
-            });
-            if (!newPort.isLinked())
-            {
-                newPort.set(oldPortOut.value);
-            }
-            newPort.onLinkChanged = savePortData;
-
-            if (oldPortOut.title)
-            {
-                newPort.setUiAttribs({ "title": oldPortOut.title });
-            }
-        }
-    }
-    if (op.patch.isEditorMode()) CABLES.UI.undo.resume();
-};
-
-
-};
-
-Ops.Cables.CustomOp_v2.prototype = new CABLES.Op();
-CABLES.OPS["19166505-2619-4012-ad85-d2de60f27274"]={f:Ops.Cables.CustomOp_v2,objName:"Ops.Cables.CustomOp_v2"};
-
-
-
-
-// **************************************************************
-// 
-// Ops.Sidebar.TextInput_v2
-// 
-// **************************************************************
-
-Ops.Sidebar.TextInput_v2 = function()
-{
-CABLES.Op.apply(this,arguments);
-const op=this;
-const attachments={};
-// inputs
-const parentPort = op.inObject("Link");
-const labelPort = op.inString("Text", "Text");
-const defaultValuePort = op.inString("Default", "");
-const inPlaceholder = op.inString("Placeholder", "");
-const inTextArea = op.inBool("TextArea", false);
-const inGreyOut = op.inBool("Grey Out", false);
-const inVisible = op.inBool("Visible", true);
-
-// outputs
-const siblingsPort = op.outObject("Children");
-const valuePort = op.outString("Result", defaultValuePort.get());
-const outFocus = op.outBool("Focus");
-
-// vars
-const el = document.createElement("div");
-el.dataset.op = op.id;
-el.classList.add("cablesEle");
-el.classList.add("sidebar__item");
-el.classList.add("sidebar__text-input");
-el.classList.add("sidebar__reloadable");
-
-const label = document.createElement("div");
-label.classList.add("sidebar__item-label");
-const labelText = document.createTextNode(labelPort.get());
-label.appendChild(labelText);
-el.appendChild(label);
-
-label.addEventListener("dblclick", function ()
-{
-    valuePort.set(defaultValuePort.get());
-    input.value = defaultValuePort.get();
-});
-
-let input = null;
-creatElement();
-
-op.toWorkPortsNeedToBeLinked(parentPort);
-
-inTextArea.onChange = creatElement;
-
-function creatElement()
-{
-    if (input)input.remove();
-    if (!inTextArea.get())
-    {
-        input = document.createElement("input");
-    }
-    else
-    {
-        input = document.createElement("textarea");
-        onDefaultValueChanged();
-    }
-
-    input.classList.add("sidebar__text-input-input");
-    input.setAttribute("type", "text");
-    input.setAttribute("value", defaultValuePort.get());
-    input.setAttribute("placeholder", inPlaceholder.get());
-
-    el.appendChild(input);
-    input.addEventListener("input", onInput);
-    input.addEventListener("focus", onFocus);
-    input.addEventListener("blur", onBlur);
-}
-
-const greyOut = document.createElement("div");
-greyOut.classList.add("sidebar__greyout");
-el.appendChild(greyOut);
-greyOut.style.display = "none";
-
-function onFocus()
-{
-    outFocus.set(true);
-}
-
-function onBlur()
-{
-    outFocus.set(false);
-}
-
-inPlaceholder.onChange = () =>
-{
-    input.setAttribute("placeholder", inPlaceholder.get());
-};
-
-inGreyOut.onChange = function ()
-{
-    greyOut.style.display = inGreyOut.get() ? "block" : "none";
-};
-
-inVisible.onChange = function ()
-{
-    el.style.display = inVisible.get() ? "block" : "none";
-};
-
-// events
-parentPort.onChange = onParentChanged;
-labelPort.onChange = onLabelTextChanged;
-defaultValuePort.onChange = onDefaultValueChanged;
-op.onDelete = onDelete;
-
-// functions
-
-function onInput(ev)
-{
-    valuePort.set(ev.target.value);
-}
-
-function onDefaultValueChanged()
-{
-    const defaultValue = defaultValuePort.get();
-    valuePort.set(defaultValue);
-    input.value = defaultValue;
-}
-
-function onLabelTextChanged()
-{
-    const labelText = labelPort.get();
-    label.textContent = labelText;
-    if (CABLES.UI)
-    {
-        op.setTitle("Text Input: " + labelText);
-    }
-}
-
-function onParentChanged()
-{
-    siblingsPort.set(null);
-    const parent = parentPort.get();
-    if (parent && parent.parentElement)
-    {
-        parent.parentElement.appendChild(el);
-        siblingsPort.set(parent);
-    }
-    else
-    { // detach
-        if (el.parentElement)
-        {
-            el.parentElement.removeChild(el);
-        }
-    }
-}
-
-function showElement(el)
-{
-    if (el)
-    {
-        el.style.display = "block";
-    }
-}
-
-function hideElement(el)
-{
-    if (el)
-    {
-        el.style.display = "none";
-    }
-}
-
-function onDelete()
-{
-    removeElementFromDOM(el);
-}
-
-function removeElementFromDOM(el)
-{
-    if (el && el.parentNode && el.parentNode.removeChild)
-    {
-        el.parentNode.removeChild(el);
-    }
-}
-
-
-};
-
-Ops.Sidebar.TextInput_v2.prototype = new CABLES.Op();
-CABLES.OPS["6538a190-e73c-451b-964e-d010ee267aa9"]={f:Ops.Sidebar.TextInput_v2,objName:"Ops.Sidebar.TextInput_v2"};
-
-
-
-
-// **************************************************************
-// 
-// Ops.Sidebar.Slider_v3
-// 
-// **************************************************************
-
-Ops.Sidebar.Slider_v3 = function()
-{
-CABLES.Op.apply(this,arguments);
-const op=this;
-const attachments={};
-// constants
-const STEP_DEFAULT = 0.00001;
-
-// inputs
-const parentPort = op.inObject("link");
-const labelPort = op.inString("Text", "Slider");
-const minPort = op.inValue("Min", 0);
-const maxPort = op.inValue("Max", 1);
-const stepPort = op.inValue("Step", STEP_DEFAULT);
-const labelSuffix = op.inString("Suffix", "");
-
-const inGreyOut = op.inBool("Grey Out", false);
-const inVisible = op.inBool("Visible", true);
-
-const inputValuePort = op.inValue("Input", 0.5);
-const setDefaultValueButtonPort = op.inTriggerButton("Set Default");
-const reset = op.inTriggerButton("Reset");
-
-let parent = null;
-
-const defaultValuePort = op.inValue("Default", 0.5);
-defaultValuePort.setUiAttribs({ "hidePort": true, "greyout": true });
-
-// outputs
-const siblingsPort = op.outObject("childs");
-const valuePort = op.outValue("Result", defaultValuePort.get());
-
-op.toWorkNeedsParent("Ops.Sidebar.Sidebar");
-op.setPortGroup("Range", [minPort, maxPort, stepPort]);
-op.setPortGroup("Display", [inGreyOut, inVisible]);
-
-// vars
-const el = document.createElement("div");
-el.addEventListener("dblclick", function ()
-{
-    valuePort.set(parseFloat(defaultValuePort.get()));
-    inputValuePort.set(parseFloat(defaultValuePort.get()));
-});
-
-el.dataset.op = op.id;
-el.classList.add("cablesEle");
-
-el.classList.add("sidebar__item");
-el.classList.add("sidebar__slider");
-el.classList.add("sidebar__reloadable");
-
-op.patch.on("sidebarStylesChanged", () => { updateActiveTrack(); });
-
-const label = document.createElement("div");
-label.classList.add("sidebar__item-label");
-
-const greyOut = document.createElement("div");
-greyOut.classList.add("sidebar__greyout");
-el.appendChild(greyOut);
-greyOut.style.display = "none";
-
-const labelText = document.createTextNode(labelPort.get());
-label.appendChild(labelText);
-el.appendChild(label);
-
-const value = document.createElement("input");
-value.value = defaultValuePort.get();
-value.classList.add("sidebar__text-input-input");
-value.setAttribute("type", "text");
-value.oninput = onTextInputChanged;
-el.appendChild(value);
-
-const suffixEle = document.createElement("span");
-// setValueFieldValue(defaultValuePort).get();
-// value.setAttribute("type", "text");
-// value.oninput = onTextInputChanged;
-
-el.appendChild(suffixEle);
-
-labelSuffix.onChange = () =>
-{
-    suffixEle.innerHTML = labelSuffix.get();
-};
-
-const inputWrapper = document.createElement("div");
-inputWrapper.classList.add("sidebar__slider-input-wrapper");
-el.appendChild(inputWrapper);
-
-const activeTrack = document.createElement("div");
-activeTrack.classList.add("sidebar__slider-input-active-track");
-inputWrapper.appendChild(activeTrack);
-const input = document.createElement("input");
-input.classList.add("sidebar__slider-input");
-input.setAttribute("min", minPort.get());
-input.setAttribute("max", maxPort.get());
-input.setAttribute("type", "range");
-input.setAttribute("step", stepPort.get());
-input.setAttribute("value", defaultValuePort.get());
-input.style.display = "block"; /* needed because offsetWidth returns 0 otherwise */
-inputWrapper.appendChild(input);
-
-updateActiveTrack();
-input.addEventListener("input", onSliderInput);
-
-// events
-parentPort.onChange = onParentChanged;
-labelPort.onChange = onLabelTextChanged;
-inputValuePort.onChange = onInputValuePortChanged;
-defaultValuePort.onChange = onDefaultValueChanged;
-setDefaultValueButtonPort.onTriggered = onSetDefaultValueButtonPress;
-minPort.onChange = onMinPortChange;
-maxPort.onChange = onMaxPortChange;
-stepPort.onChange = stepPortChanged;
-op.onDelete = onDelete;
-
-// op.onLoadedValueSet=function()
-op.onLoaded = op.onInit = function ()
-{
-    if (op.patch.config.sidebar)
-    {
-        op.patch.config.sidebar[labelPort.get()];
-        valuePort.set(op.patch.config.sidebar[labelPort.get()]);
-    }
-    else
-    {
-        valuePort.set(parseFloat(defaultValuePort.get()));
-        inputValuePort.set(parseFloat(defaultValuePort.get()));
-        // onInputValuePortChanged();
-    }
-};
-
-reset.onTriggered = function ()
-{
-    const newValue = parseFloat(defaultValuePort.get());
-    valuePort.set(newValue);
-    setValueFieldValue(newValue);
-    setInputFieldValue(newValue);
-    inputValuePort.set(newValue);
-    updateActiveTrack();
-};
-
-inGreyOut.onChange = function ()
-{
-    greyOut.style.display = inGreyOut.get() ? "block" : "none";
-};
-
-inVisible.onChange = function ()
-{
-    el.style.display = inVisible.get() ? "block" : "none";
-};
-
-function onTextInputChanged(ev)
-{
-    let newValue = parseFloat(ev.target.value);
-    if (isNaN(newValue)) newValue = 0;
-    const min = minPort.get();
-    const max = maxPort.get();
-    if (newValue < min) { newValue = min; }
-    else if (newValue > max) { newValue = max; }
-    // setInputFieldValue(newValue);
-    valuePort.set(newValue);
-    updateActiveTrack();
-    inputValuePort.set(newValue);
-    op.refreshParams();
-}
-
-function onInputValuePortChanged()
-{
-    let newValue = parseFloat(inputValuePort.get());
-    const minValue = minPort.get();
-    const maxValue = maxPort.get();
-    if (newValue > maxValue) { newValue = maxValue; }
-    else if (newValue < minValue) { newValue = minValue; }
-    setValueFieldValue(newValue);
-    setInputFieldValue(newValue);
-    valuePort.set(newValue);
-    updateActiveTrack();
-}
-
-function onSetDefaultValueButtonPress()
-{
-    let newValue = parseFloat(inputValuePort.get());
-    const minValue = minPort.get();
-    const maxValue = maxPort.get();
-    if (newValue > maxValue) { newValue = maxValue; }
-    else if (newValue < minValue) { newValue = minValue; }
-    setValueFieldValue(newValue);
-    setInputFieldValue(newValue);
-    valuePort.set(newValue);
-    defaultValuePort.set(newValue);
-    op.refreshParams();
-
-    updateActiveTrack();
-}
-
-function onSliderInput(ev)
-{
-    ev.preventDefault();
-    ev.stopPropagation();
-    setValueFieldValue(ev.target.value);
-    const inputFloat = parseFloat(ev.target.value);
-    valuePort.set(inputFloat);
-    inputValuePort.set(inputFloat);
-    op.refreshParams();
-
-    updateActiveTrack();
-    return false;
-}
-
-function stepPortChanged()
-{
-    const step = stepPort.get();
-    input.setAttribute("step", step);
-    updateActiveTrack();
-}
-
-function updateActiveTrack(val)
-{
-    let valueToUse = parseFloat(input.value);
-    if (typeof val !== "undefined") valueToUse = val;
-    let availableWidth = activeTrack.parentElement.getBoundingClientRect().width || 220;
-    if (parent) availableWidth = parseInt(getComputedStyle(parent.parentElement).getPropertyValue("--sidebar-width")) - 20;
-
-    const trackWidth = CABLES.map(
-        valueToUse,
-        parseFloat(input.min),
-        parseFloat(input.max),
-        0,
-        availableWidth - 16 /* subtract slider thumb width */
-    );
-    activeTrack.style.width = trackWidth + "px";
-}
-
-function onMinPortChange()
-{
-    const min = minPort.get();
-    input.setAttribute("min", min);
-    updateActiveTrack();
-}
-
-function onMaxPortChange()
-{
-    const max = maxPort.get();
-    input.setAttribute("max", max);
-    updateActiveTrack();
-}
-
-function onDefaultValueChanged()
-{
-    const defaultValue = defaultValuePort.get();
-    valuePort.set(parseFloat(defaultValue));
-    onMinPortChange();
-    onMaxPortChange();
-    setInputFieldValue(defaultValue);
-    setValueFieldValue(defaultValue);
-
-    updateActiveTrack(defaultValue); // needs to be passed as argument, is this async?
-}
-
-function onLabelTextChanged()
-{
-    const labelText = labelPort.get();
-    label.textContent = labelText;
-    if (CABLES.UI) op.setTitle("Slider: " + labelText);
-}
-
-function onParentChanged()
-{
-    siblingsPort.set(null);
-    parent = parentPort.get();
-    if (parent && parent.parentElement)
-    {
-        parent.parentElement.appendChild(el);
-        siblingsPort.set(parent);
-    }
-    else if (el.parentElement) el.parentElement.removeChild(el);
-
-    updateActiveTrack();
-}
-
-function setValueFieldValue(v)
-{
-    value.value = v;
-}
-
-function setInputFieldValue(v)
-{
-    input.value = v;
-}
-
-function showElement(el)
-{
-    if (el)el.style.display = "block";
-}
-
-function hideElement(el)
-{
-    if (el)el.style.display = "none";
-}
-
-function onDelete()
-{
-    removeElementFromDOM(el);
-}
-
-function removeElementFromDOM(el)
-{
-    if (el && el.parentNode && el.parentNode.removeChild) el.parentNode.removeChild(el);
-}
-
-
-};
-
-Ops.Sidebar.Slider_v3.prototype = new CABLES.Op();
-CABLES.OPS["74730122-5cba-4d0d-b610-df334ec6220a"]={f:Ops.Sidebar.Slider_v3,objName:"Ops.Sidebar.Slider_v3"};
-
-
-
-
-// **************************************************************
-// 
-// Ops.String.NumberToString_v2
-// 
-// **************************************************************
-
-Ops.String.NumberToString_v2 = function()
-{
-CABLES.Op.apply(this,arguments);
-const op=this;
-const attachments={};
-const
-    val = op.inValue("Number"),
-    result = op.outString("Result");
-
-val.onChange = update;
-update();
-
-function update()
-{
-    result.set(String(val.get() || 0));
-}
-
-
-};
-
-Ops.String.NumberToString_v2.prototype = new CABLES.Op();
-CABLES.OPS["5c6d375a-82db-4366-8013-93f56b4061a9"]={f:Ops.String.NumberToString_v2,objName:"Ops.String.NumberToString_v2"};
-
-
-
-
-// **************************************************************
-// 
 // Ops.Gl.RandomCluster
 // 
 // **************************************************************
@@ -16362,6 +15306,513 @@ CABLES.OPS["65e8b8a2-ba13-485f-883a-2bcf377989da"]={f:Ops.Trigger.GateTrigger,ob
 
 // **************************************************************
 // 
+// Ops.Cables.CustomOp_v2
+// 
+// **************************************************************
+
+Ops.Cables.CustomOp_v2 = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={};
+const defaultCode = "\
+// you can use custom javascript code here, it will be bound to the\n\
+// scope of the current op, which is available as `op`.\n\
+// \n\
+// have a look at the documentation at:\n\
+// https://docs.cables.gl/dev_hello_op/dev_hello_op.html\n\
+\n\
+";
+
+const inJS = op.inStringEditor("JavaScript");
+inJS.setUiAttribs({ "editorSyntax": "js" });
+inJS.set(defaultCode);
+const inLib = op.inUrl("Library", [".js"]);
+
+const portsData = op.inString("portsData", "{}");
+portsData.setUiAttribs({ "hidePort": true });
+portsData.setUiAttribs({ "hideParam": true });
+const protectedPorts = [inJS.id, inLib.id, portsData.id];
+
+let wasPasted = false;
+
+op.setUiError("error", null);
+
+const init = function ()
+{
+    if (op.uiAttribs)
+    {
+        wasPasted = op.uiAttribs.pasted;
+    }
+    restorePorts();
+    loadLibAndExecute();
+    inLib.onChange = inJS.onChange = loadLibAndExecute;
+    if (wasPasted) wasPasted = false;
+};
+
+op.onLoadedValueSet = init;
+op.patch.on("onOpAdd", (newOp, fromDeserizalize) =>
+{
+    if (op == newOp && !fromDeserizalize)
+    {
+        init();
+    }
+});
+
+op.onError = function (ex)
+{
+    if (op.patch.isEditorMode())
+    {
+        op.setUiError("error", ex);
+        const str = inJS.get();
+        const badLines = [];
+        let htmlWarning = "";
+        const lines = str.match(/^.*((\r\n|\n|\r)|$)/gm);
+
+        let anonLine = "";
+        const exLines = ex.stack.split("\n");
+        for (let i = 0; i < exLines.length; i++)
+        {
+            // firefox
+            if (exLines[i].includes("Function:"))
+            {
+                anonLine = exLines[i];
+                break;
+            }
+            // chrome
+            if (exLines[i].includes("anonymous"))
+            {
+                anonLine = exLines[i];
+                break;
+            }
+        }
+
+        let lineFields = anonLine.split(":");
+        let errorLine = lineFields[lineFields.length - 2];
+
+        badLines.push(errorLine - 2);
+
+        for (const i in lines)
+        {
+            const j = parseInt(i, 10) + 1;
+            const line = j + ": " + lines[i];
+
+            let isBadLine = false;
+            for (const bj in badLines)
+                if (badLines[bj] == j) isBadLine = true;
+
+            if (isBadLine) htmlWarning += "<span class=\"error\">";
+            htmlWarning += line.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("\"", "&quot;")
+                .replaceAll("'", "&#039;");
+            if (isBadLine) htmlWarning += "</span>";
+        }
+
+        ex.customMessage = htmlWarning;
+        ex.stack = "";
+        op.patch.emitEvent("exceptionOp", ex, op.name);
+    }
+};
+
+const getEvalFunction = () =>
+{
+    op.setUiError("error", null);
+    let errorEl = document.getElementById("customop-error-" + op.id);
+    if (errorEl)
+    {
+        errorEl.remove();
+    }
+    try
+    {
+        return new Function("op", inJS.get());
+    }
+    catch (err)
+    {
+        op.onError(err);
+        if (op.patch.isEditorMode())
+        {
+            errorEl = document.createElement("script");
+            errorEl.id = "customop-error-" + op.id;
+            errorEl.type = "text/javascript";
+            errorEl.innerHTML = inJS.get();
+            document.body.appendChild(errorEl);
+        }
+        else
+        {
+            op.logError("error creating javascript function", err);
+        }
+        return null;
+    }
+};
+
+function loadLibAndExecute()
+{
+    if (inLib.get())
+    {
+        let scriptTag = document.getElementById("customop_lib_" + op.id);
+        if (scriptTag)
+        {
+            scriptTag.remove();
+        }
+        scriptTag = document.createElement("script");
+        scriptTag.id = "customlib_" + op.id;
+        scriptTag.type = "text/javascript";
+        scriptTag.src = op.patch.getFilePath(String(inLib.get()));
+        scriptTag.onload = function ()
+        {
+            op.logVerbose("done loading library", inLib.get());
+            execute();
+        };
+        document.body.appendChild(scriptTag);
+    }
+    else if (inJS.get() && inJS.get() !== defaultCode)
+    {
+        execute();
+    }
+}
+
+const removeInPort = (port) =>
+{
+    port.removeLinks();
+    for (let ipi = 0; ipi < op.portsIn.length; ipi++)
+    {
+        if (op.portsIn[ipi] == port)
+        {
+            op.portsIn.splice(ipi, 1);
+            return;
+        }
+    }
+};
+
+const removeOutPort = (port) =>
+{
+    port.removeLinks();
+    for (let ipi = 0; ipi < op.portsOut.length; ipi++)
+    {
+        if (op.portsOut[ipi] == port)
+        {
+            op.portsOut.splice(ipi, 1);
+            return;
+        }
+    }
+};
+
+const execute = () =>
+{
+    const evalFunction = getEvalFunction();
+    if (evalFunction)
+    {
+        try
+        {
+            const oldLinksIn = {};
+            const oldValuesIn = {};
+            const oldLinksOut = {};
+            const removeInPorts = [];
+            const removeOutPorts = [];
+            op.portsIn.forEach((port) =>
+            {
+                if (!protectedPorts.includes(port.id))
+                {
+                    oldLinksIn[port.name] = [];
+                    oldValuesIn[port.name] = port.get();
+                    port.links.forEach((link) =>
+                    {
+                        const linkInfo = {
+                            "op": link.portOut.parent,
+                            "portName": link.portOut.name
+                        };
+                        oldLinksIn[port.name].push(linkInfo);
+                    });
+                    removeInPorts.push(port);
+                }
+            });
+            op.portsOut.forEach((port) =>
+            {
+                oldLinksOut[port.name] = [];
+                port.links.forEach((link) =>
+                {
+                    const linkInfo = {
+                        "op": link.portIn.parent,
+                        "portName": link.portIn.name
+                    };
+                    oldLinksOut[port.name].push(linkInfo);
+                });
+                removeOutPorts.push(port);
+            });
+            removeInPorts.forEach((port) =>
+            {
+                removeInPort(port);
+            });
+            removeOutPorts.forEach((port) =>
+            {
+                removeOutPort(port);
+            });
+            if (removeOutPorts.length > 0 || removeInPorts.length > 0)
+            {
+                this.fireEvent("onUiAttribsChange", {});
+                this.fireEvent("onPortRemoved", {});
+            }
+            evalFunction(this);
+
+            op.portsIn.forEach((port) =>
+            {
+                if (!protectedPorts.includes(port.id))
+                {
+                    port.onLinkChanged = savePortData;
+
+                    if (oldLinksIn[port.name])
+                    {
+                        oldLinksIn[port.name].forEach((link) =>
+                        {
+                            op.patch.link(op, port.name, link.op, link.portName);
+                        });
+                    }
+
+                    if (typeof port.onChange == "function")
+                    {
+                        const oldHandler = port.onChange;
+                        port.onChange = (p, v) =>
+                        {
+                            if (!port.isLinked()) savePortData();
+                            oldHandler(p, v);
+                        };
+                    }
+                    else
+                    {
+                        port.onChange = () =>
+                        {
+                            if (!port.isLinked()) savePortData();
+                        };
+                    }
+
+                    // for backwards compatibility, do not add default handler (handled above)
+                    if (typeof port.onValueChanged == "function")
+                    {
+                        const oldValueHandler = port.onValueChanged;
+                        port.onValueChanged = (p, v) =>
+                        {
+                            if (!port.isLinked()) savePortData();
+                            oldValueHandler(p, v);
+                        };
+                    }
+
+                    if (oldValuesIn[port.name])
+                    {
+                        port.set(oldValuesIn[port.name]);
+                    }
+                }
+            });
+            op.portsOut.forEach((port) =>
+            {
+                port.onLinkChanged = savePortData;
+
+                if (oldLinksOut[port.name])
+                {
+                    oldLinksOut[port.name].forEach((link) =>
+                    {
+                        op.patch.link(op, port.name, link.op, link.portName);
+                    });
+                }
+            });
+            if (wasPasted)
+            {
+                wasPasted = false;
+            }
+            savePortData();
+        }
+        catch (e)
+        {
+            if (op.patch.isEditorMode())
+            {
+                op.onError(e);
+                const name = "Ops.Custom.CUSTOM" + op.id.replace(/-/g, "");
+                const code = inJS.get();
+                let codeHead = "Ops.Custom = Ops.Custom || {};\n";
+                codeHead += name + " = " + name + " || {};\n";
+                codeHead += name + " = function()\n{\nCABLES.Op.apply(this,arguments);\nconst op=this;\n";
+                let codeFoot = "\n\n};\n\n" + name + ".prototype = new CABLES.Op();\n";
+                codeFoot += "new " + name + "();\n";
+                const opCode = codeHead + code + codeFoot;
+                const errorEl = document.createElement("script");
+                errorEl.id = "customop-error-" + op.id;
+                errorEl.type = "text/javascript";
+                errorEl.innerHTML = opCode;
+                document.body.appendChild(errorEl);
+            }
+            else
+            {
+                op.logError("error executing javascript code", e);
+            }
+        }
+    }
+};
+
+function savePortData()
+{
+    const newPortsData = { "portsIn": {}, "portsOut": {} };
+    op.portsIn.forEach((port) =>
+    {
+        if (!protectedPorts.includes(port.id))
+        {
+            let v = port.get();
+            if (port.ignoreValueSerialize)v = null;
+            const portData = {
+                "name": port.name,
+                "title": port.title,
+                "value": v,
+                "type": port.type,
+                "links": []
+            };
+            port.links.forEach((link) =>
+            {
+                const linkData = {
+                    "objOut": link.portOut.parent.id,
+                    "portOut": link.portOut.name
+                };
+                portData.links.push(linkData);
+            });
+            newPortsData.portsIn[port.name] = portData;
+        }
+    });
+
+    op.portsOut.forEach((port) =>
+    {
+        if (!protectedPorts.includes(port.id))
+        {
+            let v = port.get();
+            if (port.ignoreValueSerialize)v = null;
+
+            const portData = {
+                "name": port.name,
+                "title": port.title,
+                "value": v,
+                "type": port.type,
+                "links": []
+            };
+            port.links.forEach((link) =>
+            {
+                const linkData = {
+                    "objIn": link.portIn.parent.id,
+                    "portIn": link.portIn.name
+                };
+                portData.links.push(linkData);
+            });
+            newPortsData.portsOut[port.name] = portData;
+        }
+    });
+
+    let serializedPortsData = "{}";
+    try
+    {
+        serializedPortsData = JSON.stringify(newPortsData);
+    }
+    catch (e)
+    {
+        op.log("failed to stringify new port data", newPortsData);
+    }
+    portsData.set(serializedPortsData);
+}
+
+const getOldPorts = () =>
+{
+    const jsonData = portsData.get();
+    let oldPorts = {};
+    try
+    {
+        oldPorts = JSON.parse(jsonData);
+    }
+    catch (e)
+    {
+        op.log("failed to parse old port data", jsonData);
+    }
+
+    let oldPortsIn = {};
+    let oldPortsOut = {};
+
+    if (oldPorts.portsOut)
+    {
+        oldPortsOut = oldPorts.portsOut;
+    }
+    if (oldPorts.portsIn)
+    {
+        oldPortsIn = oldPorts.portsIn;
+    }
+    return { "portsIn": oldPortsIn, "portsOut": oldPortsOut };
+};
+
+const restorePorts = () =>
+{
+    const oldPorts = getOldPorts();
+    const portInKeys = Object.keys(oldPorts.portsIn);
+    if (op.patch.isEditorMode()) CABLES.UI.undo.pause();
+    for (let i = 0; i < portInKeys.length; i++)
+    {
+        const oldPortIn = oldPorts.portsIn[portInKeys[i]];
+        const newPort = op.addInPort(new CABLES.Port(op, oldPortIn.name, oldPortIn.type));
+
+        if (!wasPasted && Array.isArray(oldPortIn.links))
+        {
+            oldPortIn.links.forEach((link) =>
+            {
+                let parent = op.patch.getOpById(link.objOut);
+                if (parent)
+                {
+                    op.patch.link(parent, link.portOut, op, newPort.name);
+                }
+            });
+        }
+        if (!newPort.isLinked())
+        {
+            newPort.set(oldPortIn.value);
+        }
+        newPort.onLinkChanged = savePortData;
+
+        if (oldPortIn.title)
+        {
+            newPort.setUiAttribs({ "title": oldPortIn.title });
+        }
+    }
+
+    const portOutKeys = Object.keys(oldPorts.portsOut);
+    for (let i = 0; i < portOutKeys.length; i++)
+    {
+        const oldPortOut = oldPorts.portsOut[portOutKeys[i]];
+        const newPort = op.addOutPort(new CABLES.Port(op, oldPortOut.name, oldPortOut.type));
+        if (!wasPasted && Array.isArray(oldPortOut.links))
+        {
+            oldPortOut.links.forEach((link) =>
+            {
+                let parent = op.patch.getOpById(link.objIn);
+                if (parent)
+                {
+                    op.patch.link(op, newPort.name, parent, link.portIn);
+                }
+            });
+            if (!newPort.isLinked())
+            {
+                newPort.set(oldPortOut.value);
+            }
+            newPort.onLinkChanged = savePortData;
+
+            if (oldPortOut.title)
+            {
+                newPort.setUiAttribs({ "title": oldPortOut.title });
+            }
+        }
+    }
+    if (op.patch.isEditorMode()) CABLES.UI.undo.resume();
+};
+
+
+};
+
+Ops.Cables.CustomOp_v2.prototype = new CABLES.Op();
+CABLES.OPS["19166505-2619-4012-ad85-d2de60f27274"]={f:Ops.Cables.CustomOp_v2,objName:"Ops.Cables.CustomOp_v2"};
+
+
+
+
+// **************************************************************
+// 
 // Ops.Trigger.Interval
 // 
 // **************************************************************
@@ -16645,6 +16096,38 @@ function resolve(path, obj = self, separator = ".")
 
 Ops.Json.ObjectGetNumberByPath.prototype = new CABLES.Op();
 CABLES.OPS["ec736baf-feb8-4d8d-b04c-173fc197759c"]={f:Ops.Json.ObjectGetNumberByPath,objName:"Ops.Json.ObjectGetNumberByPath"};
+
+
+
+
+// **************************************************************
+// 
+// Ops.String.NumberToString_v2
+// 
+// **************************************************************
+
+Ops.String.NumberToString_v2 = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={};
+const
+    val = op.inValue("Number"),
+    result = op.outString("Result");
+
+val.onChange = update;
+update();
+
+function update()
+{
+    result.set(String(val.get() || 0));
+}
+
+
+};
+
+Ops.String.NumberToString_v2.prototype = new CABLES.Op();
+CABLES.OPS["5c6d375a-82db-4366-8013-93f56b4061a9"]={f:Ops.String.NumberToString_v2,objName:"Ops.String.NumberToString_v2"};
 
 
 
@@ -17429,6 +16912,709 @@ defaultVal.onChange = function(){
 
 Ops.Value.SwitchNumberOnTrigger.prototype = new CABLES.Op();
 CABLES.OPS["338032c5-bf47-454b-8ae1-cd91f17e5c5b"]={f:Ops.Value.SwitchNumberOnTrigger,objName:"Ops.Value.SwitchNumberOnTrigger"};
+
+
+
+
+// **************************************************************
+// 
+// Ops.Sidebar.TextInput_v2
+// 
+// **************************************************************
+
+Ops.Sidebar.TextInput_v2 = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={};
+// inputs
+const parentPort = op.inObject("Link");
+const labelPort = op.inString("Text", "Text");
+const defaultValuePort = op.inString("Default", "");
+const inPlaceholder = op.inString("Placeholder", "");
+const inTextArea = op.inBool("TextArea", false);
+const inGreyOut = op.inBool("Grey Out", false);
+const inVisible = op.inBool("Visible", true);
+
+// outputs
+const siblingsPort = op.outObject("Children");
+const valuePort = op.outString("Result", defaultValuePort.get());
+const outFocus = op.outBool("Focus");
+
+// vars
+const el = document.createElement("div");
+el.dataset.op = op.id;
+el.classList.add("cablesEle");
+el.classList.add("sidebar__item");
+el.classList.add("sidebar__text-input");
+el.classList.add("sidebar__reloadable");
+
+const label = document.createElement("div");
+label.classList.add("sidebar__item-label");
+const labelText = document.createTextNode(labelPort.get());
+label.appendChild(labelText);
+el.appendChild(label);
+
+label.addEventListener("dblclick", function ()
+{
+    valuePort.set(defaultValuePort.get());
+    input.value = defaultValuePort.get();
+});
+
+let input = null;
+creatElement();
+
+op.toWorkPortsNeedToBeLinked(parentPort);
+
+inTextArea.onChange = creatElement;
+
+function creatElement()
+{
+    if (input)input.remove();
+    if (!inTextArea.get())
+    {
+        input = document.createElement("input");
+    }
+    else
+    {
+        input = document.createElement("textarea");
+        onDefaultValueChanged();
+    }
+
+    input.classList.add("sidebar__text-input-input");
+    input.setAttribute("type", "text");
+    input.setAttribute("value", defaultValuePort.get());
+    input.setAttribute("placeholder", inPlaceholder.get());
+
+    el.appendChild(input);
+    input.addEventListener("input", onInput);
+    input.addEventListener("focus", onFocus);
+    input.addEventListener("blur", onBlur);
+}
+
+const greyOut = document.createElement("div");
+greyOut.classList.add("sidebar__greyout");
+el.appendChild(greyOut);
+greyOut.style.display = "none";
+
+function onFocus()
+{
+    outFocus.set(true);
+}
+
+function onBlur()
+{
+    outFocus.set(false);
+}
+
+inPlaceholder.onChange = () =>
+{
+    input.setAttribute("placeholder", inPlaceholder.get());
+};
+
+inGreyOut.onChange = function ()
+{
+    greyOut.style.display = inGreyOut.get() ? "block" : "none";
+};
+
+inVisible.onChange = function ()
+{
+    el.style.display = inVisible.get() ? "block" : "none";
+};
+
+// events
+parentPort.onChange = onParentChanged;
+labelPort.onChange = onLabelTextChanged;
+defaultValuePort.onChange = onDefaultValueChanged;
+op.onDelete = onDelete;
+
+// functions
+
+function onInput(ev)
+{
+    valuePort.set(ev.target.value);
+}
+
+function onDefaultValueChanged()
+{
+    const defaultValue = defaultValuePort.get();
+    valuePort.set(defaultValue);
+    input.value = defaultValue;
+}
+
+function onLabelTextChanged()
+{
+    const labelText = labelPort.get();
+    label.textContent = labelText;
+    if (CABLES.UI)
+    {
+        op.setTitle("Text Input: " + labelText);
+    }
+}
+
+function onParentChanged()
+{
+    siblingsPort.set(null);
+    const parent = parentPort.get();
+    if (parent && parent.parentElement)
+    {
+        parent.parentElement.appendChild(el);
+        siblingsPort.set(parent);
+    }
+    else
+    { // detach
+        if (el.parentElement)
+        {
+            el.parentElement.removeChild(el);
+        }
+    }
+}
+
+function showElement(el)
+{
+    if (el)
+    {
+        el.style.display = "block";
+    }
+}
+
+function hideElement(el)
+{
+    if (el)
+    {
+        el.style.display = "none";
+    }
+}
+
+function onDelete()
+{
+    removeElementFromDOM(el);
+}
+
+function removeElementFromDOM(el)
+{
+    if (el && el.parentNode && el.parentNode.removeChild)
+    {
+        el.parentNode.removeChild(el);
+    }
+}
+
+
+};
+
+Ops.Sidebar.TextInput_v2.prototype = new CABLES.Op();
+CABLES.OPS["6538a190-e73c-451b-964e-d010ee267aa9"]={f:Ops.Sidebar.TextInput_v2,objName:"Ops.Sidebar.TextInput_v2"};
+
+
+
+
+// **************************************************************
+// 
+// Ops.String.StringTrim_v2
+// 
+// **************************************************************
+
+Ops.String.StringTrim_v2 = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={};
+const
+    inStr=op.inString("String"),
+    outStr=op.outString("Result",'');
+
+inStr.onChange=function()
+{
+    if(!inStr.get())outStr.set('');
+        else outStr.set(inStr.get().trim());
+};
+
+
+};
+
+Ops.String.StringTrim_v2.prototype = new CABLES.Op();
+CABLES.OPS["a9aed302-328a-4d33-bd3f-27e3e6690b9e"]={f:Ops.String.StringTrim_v2,objName:"Ops.String.StringTrim_v2"};
+
+
+
+
+// **************************************************************
+// 
+// Ops.Json.AjaxRequest_v2
+// 
+// **************************************************************
+
+Ops.Json.AjaxRequest_v2 = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={};
+const filename = op.inUrl("file"),
+    jsonp = op.inValueBool("JsonP", false),
+    headers = op.inObject("headers", {}),
+    inBody = op.inStringEditor("body", ""),
+    inMethod = op.inDropDown("HTTP Method", ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "CONNECT", "OPTIONS", "TRACE"], "GET"),
+    inContentType = op.inString("Content-Type", "application/json"),
+    inParseJson = op.inBool("parse json", true),
+    inAutoRequest = op.inBool("Auto request", true),
+    reloadTrigger = op.inTriggerButton("reload"),
+    outData = op.outObject("data"),
+    outString = op.outString("response"),
+    isLoading = op.outValue("Is Loading", false),
+    outTrigger = op.outTrigger("Loaded");
+
+filename.setUiAttribs({ "title": "URL" });
+reloadTrigger.setUiAttribs({ "buttonTitle": "trigger request" });
+
+outData.ignoreValueSerialize = true;
+outString.ignoreValueSerialize = true;
+
+inAutoRequest.onChange = filename.onChange = jsonp.onChange = headers.onChange = inMethod.onChange = inParseJson.onChange = function ()
+{
+    delayedReload(false);
+};
+
+reloadTrigger.onTriggered = function ()
+{
+    delayedReload(true);
+};
+
+let loadingId = 0;
+let reloadTimeout = 0;
+
+function delayedReload(force = false)
+{
+    clearTimeout(reloadTimeout);
+    reloadTimeout = setTimeout(function () { reload(null, force); }, 100);
+}
+
+op.onFileChanged = function (fn)
+{
+    if (filename.get() && filename.get().indexOf(fn) > -1) reload(true);
+};
+
+function reload(addCachebuster, force = false)
+{
+    if (!inAutoRequest.get() && !force) return;
+    if (!filename.get()) return;
+
+    op.patch.loading.finished(loadingId);
+
+    loadingId = op.patch.loading.start("jsonFile", "" + filename.get());
+    isLoading.set(true);
+
+    op.setUiAttrib({ "extendTitle": CABLES.basename(filename.get()) });
+    op.setUiError("jsonerr", null);
+
+    let httpClient = CABLES.ajax;
+    if (jsonp.get()) httpClient = CABLES.jsonp;
+
+    let url = op.patch.getFilePath(filename.get());
+    if (addCachebuster)url += "?rnd=" + CABLES.generateUUID();
+
+    op.patch.loading.addAssetLoadingTask(() =>
+    {
+        const body = inBody.get();
+        httpClient(
+            url,
+            (err, _data, xhr) =>
+            {
+                outData.set(null);
+                outString.set(null);
+                if (err)
+                {
+                    op.patch.loading.finished(loadingId);
+                    isLoading.set(false);
+
+                    op.logError(err);
+                    return;
+                }
+                try
+                {
+                    let data = _data;
+                    if (typeof data === "string" && inParseJson.get())
+                    {
+                        data = JSON.parse(_data);
+                        outData.set(data);
+                    }
+                    outString.set(_data);
+                    op.uiAttr({ "error": null });
+                    op.patch.loading.finished(loadingId);
+                    outTrigger.trigger();
+                    isLoading.set(false);
+                }
+                catch (e)
+                {
+                    op.logError(e);
+                    op.setUiError("jsonerr", "Problem while loading json:<br/>" + e);
+                    op.patch.loading.finished(loadingId);
+                    isLoading.set(false);
+                }
+            },
+            inMethod.get(),
+            (body && body.length > 0) ? body : null,
+            inContentType.get(),
+            null,
+            headers.get() || {}
+        );
+    });
+}
+
+
+};
+
+Ops.Json.AjaxRequest_v2.prototype = new CABLES.Op();
+CABLES.OPS["e0879058-5505-4dc4-b9ff-47a3d3c8a71a"]={f:Ops.Json.AjaxRequest_v2,objName:"Ops.Json.AjaxRequest_v2"};
+
+
+
+
+// **************************************************************
+// 
+// Ops.String.StringCompose_v3
+// 
+// **************************************************************
+
+Ops.String.StringCompose_v3 = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={};
+const
+    format=op.inString('Format',"hello $a, $b $c und $d"),
+    a=op.inString('String A','world'),
+    b=op.inString('String B',1),
+    c=op.inString('String C',2),
+    d=op.inString('String D',3),
+    e=op.inString('String E'),
+    f=op.inString('String F'),
+    result=op.outString("Result");
+
+format.onChange=
+    a.onChange=
+    b.onChange=
+    c.onChange=
+    d.onChange=
+    e.onChange=
+    f.onChange=update;
+
+update();
+
+function update()
+{
+    var str=format.get()||'';
+    if(typeof str!='string')
+        str='';
+
+    str = str.replace(/\$a/g, a.get());
+    str = str.replace(/\$b/g, b.get());
+    str = str.replace(/\$c/g, c.get());
+    str = str.replace(/\$d/g, d.get());
+    str = str.replace(/\$e/g, e.get());
+    str = str.replace(/\$f/g, f.get());
+
+    result.set(str);
+}
+
+};
+
+Ops.String.StringCompose_v3.prototype = new CABLES.Op();
+CABLES.OPS["6afea9f4-728d-4f3c-9e75-62ddc1448bf0"]={f:Ops.String.StringCompose_v3,objName:"Ops.String.StringCompose_v3"};
+
+
+
+
+// **************************************************************
+// 
+// Ops.Json.ObjectGetString
+// 
+// **************************************************************
+
+Ops.Json.ObjectGetString = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={};
+let data = op.inObject("data");
+let key = op.inString("Key");
+const result = op.outString("Result");
+
+result.ignoreValueSerialize = true;
+data.ignoreValueSerialize = true;
+
+key.onChange = function ()
+{
+    if (!key.isLinked())op.setUiAttrib({ "extendTitle": key.get() });
+    exec();
+};
+data.onChange = exec;
+
+function exec()
+{
+    if (data.get() && data.get().hasOwnProperty(key.get()))
+    {
+        result.set(data.get()[key.get()]);
+    }
+    else
+    {
+        result.set(null);
+    }
+}
+
+
+};
+
+Ops.Json.ObjectGetString.prototype = new CABLES.Op();
+CABLES.OPS["7d86cd28-f7d8-44a1-a4da-466c4782aaec"]={f:Ops.Json.ObjectGetString,objName:"Ops.Json.ObjectGetString"};
+
+
+
+
+// **************************************************************
+// 
+// Ops.Json.ObjectGetObject_v2
+// 
+// **************************************************************
+
+Ops.Json.ObjectGetObject_v2 = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={};
+const
+    data = op.inObject("Object"),
+    key = op.inString("Key"),
+    result = op.outObject("Result");
+
+result.ignoreValueSerialize = true;
+data.ignoreValueSerialize = true;
+
+key.onChange = function ()
+{
+    if (!key.isLinked())op.setUiAttrib({ "extendTitle": key.get() });
+    update();
+};
+
+data.onChange = update;
+
+function update()
+{
+    if (data.get() && data.get().hasOwnProperty(key.get()))
+    {
+        result.set(data.get()[key.get()]);
+    }
+    else
+    {
+        result.set(null);
+    }
+}
+
+
+};
+
+Ops.Json.ObjectGetObject_v2.prototype = new CABLES.Op();
+CABLES.OPS["d1dfa305-89db-4ca1-b0ac-2d6321d76ae8"]={f:Ops.Json.ObjectGetObject_v2,objName:"Ops.Json.ObjectGetObject_v2"};
+
+
+
+
+// **************************************************************
+// 
+// Ops.Math.Math
+// 
+// **************************************************************
+
+Ops.Math.Math = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={};
+const num0 = op.inFloat("number 0",0),
+    num1 = op.inFloat("number 1",0),
+    mathDropDown = op.inSwitch("math mode",['+','-','*','/','%','min','max'], "+"),
+    result = op.outNumber("result");
+
+var mathFunc;
+
+num0.onChange = num1.onChange = update;
+mathDropDown.onChange = onFilterChange;
+
+var n0=0;
+var n1=0;
+
+const mathFuncAdd = function(a,b){return a+b};
+const mathFuncSub = function(a,b){return a-b};
+const mathFuncMul = function(a,b){return a*b};
+const mathFuncDiv = function(a,b){return a/b};
+const mathFuncMod = function(a,b){return a%b};
+const mathFuncMin = function(a,b){return Math.min(a,b)};
+const mathFuncMax = function(a,b){return Math.max(a,b)};
+
+
+function onFilterChange()
+{
+    var mathSelectValue = mathDropDown.get();
+
+    if(mathSelectValue == '+')         mathFunc = mathFuncAdd;
+    else if(mathSelectValue == '-')    mathFunc = mathFuncSub;
+    else if(mathSelectValue == '*')    mathFunc = mathFuncMul;
+    else if(mathSelectValue == '/')    mathFunc = mathFuncDiv;
+    else if(mathSelectValue == '%')    mathFunc = mathFuncMod;
+    else if(mathSelectValue == 'min')  mathFunc = mathFuncMin;
+    else if(mathSelectValue == 'max')  mathFunc = mathFuncMax;
+    update();
+    op.setUiAttrib({"extendTitle":mathSelectValue});
+}
+
+function update()
+{
+   n0 = num0.get();
+   n1 = num1.get();
+
+   result.set(mathFunc(n0,n1));
+}
+
+onFilterChange();
+
+
+};
+
+Ops.Math.Math.prototype = new CABLES.Op();
+CABLES.OPS["e9fdcaca-a007-4563-8a4d-e94e08506e0f"]={f:Ops.Math.Math,objName:"Ops.Math.Math"};
+
+
+
+
+// **************************************************************
+// 
+// Ops.Html.LoadingIndicator
+// 
+// **************************************************************
+
+Ops.Html.LoadingIndicator = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={"css_ellipsis_css":".lds-ellipsis {\n\n}\n.lds-ellipsis div {\n  position: absolute;\n  /*top: 33px;*/\n  margin-top:-12px;\n  margin-left:-13px;\n  width: 13px;\n  height: 13px;\n  border-radius: 50%;\n  background: #fff;\n  animation-timing-function: cubic-bezier(0, 1, 1, 0);\n}\n.lds-ellipsis div:nth-child(1) {\n  left: 8px;\n  animation: lds-ellipsis1 0.6s infinite;\n}\n.lds-ellipsis div:nth-child(2) {\n  left: 8px;\n  animation: lds-ellipsis2 0.6s infinite;\n}\n.lds-ellipsis div:nth-child(3) {\n  left: 32px;\n  animation: lds-ellipsis2 0.6s infinite;\n}\n.lds-ellipsis div:nth-child(4) {\n  left: 56px;\n  animation: lds-ellipsis3 0.6s infinite;\n}\n@keyframes lds-ellipsis1 {\n  0% {\n    transform: scale(0);\n  }\n  100% {\n    transform: scale(1);\n  }\n}\n@keyframes lds-ellipsis3 {\n  0% {\n    transform: scale(1);\n  }\n  100% {\n    transform: scale(0);\n  }\n}\n@keyframes lds-ellipsis2 {\n  0% {\n    transform: translate(0, 0);\n  }\n  100% {\n    transform: translate(24px, 0);\n  }\n}\n","css_ring_css":".lds-ring {\n}\n.lds-ring div {\n  box-sizing: border-box;\n  display: block;\n  position: absolute;\n  width: 100%;\n  height: 100%;\n  margin: 0;\n  border: 3px solid #fff;\n  border-radius: 50%;\n  animation: lds-ring 1.2s cubic-bezier(0.5, 0, 0.5, 1) infinite;\n  border-color: #fff transparent transparent transparent;\n}\n.lds-ring div:nth-child(1) {\n  animation-delay: -0.45s;\n}\n.lds-ring div:nth-child(2) {\n  animation-delay: -0.3s;\n}\n.lds-ring div:nth-child(3) {\n  animation-delay: -0.15s;\n}\n@keyframes lds-ring {\n  0% {\n    transform: rotate(0deg);\n  }\n  100% {\n    transform: rotate(360deg);\n  }\n}\n","css_spinner_css":"._cables_spinner {\n  /*width: 40px;*/\n  /*height: 40px;*/\n  /*margin: 100px auto;*/\n  background-color: #777;\n\n  border-radius: 100%;\n  -webkit-animation: sk-scaleout 1.0s infinite ease-in-out;\n  animation: sk-scaleout 1.0s infinite ease-in-out;\n}\n\n@-webkit-keyframes sk-scaleout {\n  0% { -webkit-transform: scale(0) }\n  100% {\n    -webkit-transform: scale(1.0);\n    opacity: 0;\n  }\n}\n\n@keyframes sk-scaleout {\n  0% {\n    -webkit-transform: scale(0);\n    transform: scale(0);\n  } 100% {\n    -webkit-transform: scale(1.0);\n    transform: scale(1.0);\n    opacity: 0;\n  }\n}",};
+const
+    inVisible = op.inBool("Visible", false),
+    inStyle = op.inSwitch("Style", ["Spinner", "Ring", "Ellipsis"], "Ring");
+
+const div = document.createElement("div");
+div.dataset.op = op.id;
+const canvas = op.patch.cgl.canvas.parentElement;
+
+inStyle.onChange = updateStyle;
+
+div.appendChild(document.createElement("div"));
+div.appendChild(document.createElement("div"));
+div.appendChild(document.createElement("div"));
+
+const size = 50;
+
+div.style.width = size + "px";
+div.style.height = size + "px";
+div.style.top = "50%";
+div.style.left = "50%";
+// div.style.border="1px solid red";
+
+div.style["margin-left"] = "-" + size / 2 + "px";
+div.style["margin-top"] = "-" + size / 2 + "px";
+
+div.style.position = "absolute";
+div.style["z-index"] = "9999999";
+
+inVisible.onChange = updateVisible;
+
+let eleId = "css_loadingicon_" + CABLES.uuid();
+
+const styleEle = document.createElement("style");
+styleEle.type = "text/css";
+styleEle.id = eleId;
+
+let head = document.getElementsByTagName("body")[0];
+head.appendChild(styleEle);
+
+op.onDelete = () =>
+{
+    remove();
+    if (styleEle)styleEle.remove();
+};
+
+updateStyle();
+
+function updateStyle()
+{
+    const st = inStyle.get();
+    if (st == "Spinner")
+    {
+        div.classList.add("_cables_spinner");
+        styleEle.textContent = attachments.css_spinner_css;
+    }
+    else div.classList.remove("_cables_spinner");
+
+    if (st == "Ring")
+    {
+        div.classList.add("lds-ring");
+        styleEle.textContent = attachments.css_ring_css;
+    }
+    else div.classList.remove("lds-ring");
+
+    if (st == "Ellipsis")
+    {
+        div.classList.add("lds-ellipsis");
+        styleEle.textContent = attachments.css_ellipsis_css;
+    }
+    else div.classList.remove("lds-ellipsis");
+}
+
+function remove()
+{
+    div.remove();
+    // if (styleEle)styleEle.remove();
+}
+
+function updateVisible()
+{
+    remove();
+    if (inVisible.get()) canvas.appendChild(div);
+}
+
+
+};
+
+Ops.Html.LoadingIndicator.prototype = new CABLES.Op();
+CABLES.OPS["e102834c-6dcf-459c-9e22-44ebccfc0d3b"]={f:Ops.Html.LoadingIndicator,objName:"Ops.Html.LoadingIndicator"};
+
+
+
+
+// **************************************************************
+// 
+// Ops.String.String_v2
+// 
+// **************************************************************
+
+Ops.String.String_v2 = function()
+{
+CABLES.Op.apply(this,arguments);
+const op=this;
+const attachments={};
+const
+    v=op.inString("value",""),
+    result=op.outString("String");
+
+v.onChange=function()
+{
+    result.set(v.get());
+};
+
+
+
+};
+
+Ops.String.String_v2.prototype = new CABLES.Op();
+CABLES.OPS["d697ff82-74fd-4f31-8f54-295bc64e713d"]={f:Ops.String.String_v2,objName:"Ops.String.String_v2"};
 
 
 

@@ -14,7 +14,14 @@
 * __P2ObjNameClick__ ```String```
 * __P2ObjNameClick__ ```String```
 * __P2ObjNameClick__ ```String```
+* __P2ObjNameClick__ ```String```
+* __P2ObjNameClick__ ```String```
+* __P2ObjNameClick__ ```String```
+* __P2ObjNameClick__ ```String```
+* __P2ObjNameClick__ ```String```
+* __P2ObjNameClick__ ```String```
 * __P2ObjNameMouseover__ ```String```
+* __PageIndex__ ```Number```
 * __PageIndex__ ```Number```
 * __PageIndex__ ```Number```
 * __PageIndex__ ```Number```
